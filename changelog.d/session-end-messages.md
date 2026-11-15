@@ -1,0 +1,1 @@
+- [FIX] A terminal session that stops sending output without exiting now says so instead of closing silently, and a session killed by a signal reads clearly

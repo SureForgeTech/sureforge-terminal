@@ -2066,8 +2066,34 @@ fn ignore_once_ending(
 /// read "... exited with status Exited with code 3.".
 fn pty_exit_failure_message(exit_label: &str, status: &ExitStatus) -> String {
     match status.signal() {
-        Some(signal) => format!("{exit_label} was terminated by {signal}."),
+        // macOS names the signal through strsignal ("Terminated: 15"), so it
+        // reads as a detail in brackets rather than as part of the sentence.
+        Some(signal) => format!("{exit_label} was stopped by a signal ({signal})."),
         None => format!("{exit_label} exited with code {}.", status.exit_code()),
+    }
+}
+
+/// What to tell the user when a PTY session ends, if anything. A failed exit
+/// wins; a read error after the process exited was only the PTY closing; and
+/// output that ended with no exit and no close from the UI is explained
+/// rather than closed silently.
+fn pty_session_end_failure(
+    exit_label: &str,
+    exit_status: Option<&ExitStatus>,
+    reader_error: Option<String>,
+    reader_done: bool,
+    closed_by_ui: bool,
+) -> Option<String> {
+    match (exit_status, reader_error) {
+        (Some(status), _) if !status.success() => {
+            Some(pty_exit_failure_message(exit_label, status))
+        }
+        (Some(_), _) => None,
+        (None, Some(reader_error)) => Some(reader_error),
+        (None, None) if reader_done && !closed_by_ui => Some(format!(
+            "{exit_label} stopped sending output but did not exit, so the session was closed."
+        )),
+        (None, None) => None,
     }
 }
 
@@ -2142,6 +2168,9 @@ fn run_pty_session<E: SessionEventSink>(
     let mut exited_at: Option<Instant> = None;
     let mut reader_done_at: Option<Instant> = None;
     let mut reader_error: Option<String> = None;
+    // The UI closed the session (Close, or its command channel went away), as
+    // opposed to the session ending on its own.
+    let mut closed_by_ui = false;
 
     while !should_close {
         let mut did_work = false;
@@ -2149,6 +2178,7 @@ fn run_pty_session<E: SessionEventSink>(
         loop {
             match receiver.try_recv() {
                 Ok(NativeSessionCommand::Close) => {
+                    closed_by_ui = true;
                     should_close = true;
                     break;
                 }
@@ -2178,6 +2208,7 @@ fn run_pty_session<E: SessionEventSink>(
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
+                    closed_by_ui = true;
                     should_close = true;
                     break;
                 }
@@ -2251,6 +2282,7 @@ fn run_pty_session<E: SessionEventSink>(
         if !did_work && !should_close {
             match receiver.recv_timeout(native_session_idle_wait(&coalescer)) {
                 Ok(NativeSessionCommand::Close) => {
+                    closed_by_ui = true;
                     should_close = true;
                 }
                 Ok(NativeSessionCommand::Input(input)) => {
@@ -2275,6 +2307,7 @@ fn run_pty_session<E: SessionEventSink>(
                 }
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => {
+                    closed_by_ui = true;
                     should_close = true;
                 }
             }
@@ -2287,15 +2320,13 @@ fn run_pty_session<E: SessionEventSink>(
     }
 
     if !reported_error {
-        let failure = match (exit_status, reader_error) {
-            (Some(status), _) if !status.success() => {
-                Some(pty_exit_failure_message(&exit_label, &status))
-            }
-            // The process exited: a read error was the PTY closing.
-            (Some(_), _) => None,
-            (None, reader_error) => reader_error,
-        };
-        if let Some(failure) = failure {
+        if let Some(failure) = pty_session_end_failure(
+            &exit_label,
+            exit_status.as_ref(),
+            reader_error,
+            reader_done_at.is_some(),
+            closed_by_ui,
+        ) {
             emit_native_session_error(app, session_id, state, failure);
             set_native_session_connection_state(app, session_id, state, "error");
         }

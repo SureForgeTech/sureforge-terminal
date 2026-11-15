@@ -694,8 +694,8 @@ fn exit_failure_message_names_the_code_or_the_signal() {
         "Local shell exited with code 3."
     );
     assert_eq!(
-        pty_exit_failure_message("SSH session", &ExitStatus::with_signal("Killed")),
-        "SSH session was terminated by Killed."
+        pty_exit_failure_message("SSH session", &ExitStatus::with_signal("Terminated: 15")),
+        "SSH session was stopped by a signal (Terminated: 15)."
     );
 }
 
@@ -714,4 +714,57 @@ fn input_failure_after_the_session_started_ending_is_not_reported() {
         ignore_once_ending(error, None, Some(Instant::now())),
         Ok(())
     );
+}
+
+#[test]
+fn session_end_message_covers_each_way_a_session_ends() {
+    let failed = ExitStatus::with_exit_code(3);
+    let clean = ExitStatus::with_exit_code(0);
+    let end =
+        |status: Option<&ExitStatus>, reader_error: Option<&str>, reader_done, closed_by_ui| {
+            pty_session_end_failure(
+                "Test command",
+                status,
+                reader_error.map(str::to_string),
+                reader_done,
+                closed_by_ui,
+            )
+        };
+
+    assert_eq!(
+        end(Some(&failed), Some("EIO"), true, false).as_deref(),
+        Some("Test command exited with code 3.")
+    );
+    // A read error after the exit is the PTY closing.
+    assert_eq!(end(Some(&clean), Some("EIO"), true, false), None);
+    assert_eq!(end(Some(&clean), None, true, false), None);
+    // A read error with the process still running is reported.
+    assert_eq!(end(None, Some("EIO"), true, false).as_deref(), Some("EIO"));
+    // Output ended, no exit, nobody closed it: explained, not silent.
+    assert_eq!(
+        end(None, None, true, false).as_deref(),
+        Some("Test command stopped sending output but did not exit, so the session was closed.")
+    );
+    // Closed from the UI: not an error.
+    assert_eq!(end(None, None, true, true), None);
+    assert_eq!(end(None, None, false, true), None);
+}
+
+/// Closing a running session from the UI is not an error.
+#[test]
+fn external_loop_close_from_the_ui_reports_no_error() {
+    let run = start_external(
+        Ok(shell_spec(
+            "printf 'ready> '; sleep 30",
+            "Test command",
+            Vec::new(),
+            None,
+        )),
+        None,
+    );
+    run.sink.wait_for_output("ready> ");
+    run.send(NativeSessionCommand::Close);
+    run.finish();
+    assert!(run.sink.errors().is_empty(), "{:?}", run.sink.errors());
+    assert_torn_down(&run);
 }

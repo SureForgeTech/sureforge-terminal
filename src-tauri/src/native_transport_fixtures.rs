@@ -969,6 +969,12 @@ fn collect_external_command_output(
     let mut output = String::new();
     // #194: the reader sends raw bytes now; decode through one decoder.
     let mut decoder = crate::Utf8StreamDecoder::default();
+    // The same race the session loop had (fixed after #483): the exit can be
+    // seen before the reader has delivered the last output. Stopping at the
+    // exit made this helper fail now and then on a busy machine, so after the
+    // exit it keeps reading until the reader ends, for a bounded time.
+    let mut exited_at: Option<Instant> = None;
+    let mut reader_done = false;
 
     while started_at.elapsed() < FIXTURE_TIMEOUT {
         loop {
@@ -980,19 +986,34 @@ fn collect_external_command_output(
                     }
                 }
                 Ok(JumpSessionEvent::Error(error)) => {
+                    // After the exit a read error is the PTY closing.
+                    if exited_at.is_some() {
+                        reader_done = true;
+                        break;
+                    }
                     panic!("fixture external command errored: {error}");
                 }
-                Ok(JumpSessionEvent::Eof) => break,
+                Ok(JumpSessionEvent::Eof) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    reader_done = true;
+                    break;
+                }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
             }
         }
 
-        match child.try_wait() {
-            Ok(Some(_)) if output.contains(expected_marker) => return output,
-            Ok(Some(_)) => break,
-            Ok(None) => {}
-            Err(error) => panic!("fixture external command status should be readable: {error}"),
+        if exited_at.is_none() {
+            match child.try_wait() {
+                Ok(Some(_)) => exited_at = Some(Instant::now()),
+                Ok(None) => {}
+                Err(error) => {
+                    panic!("fixture external command status should be readable: {error}")
+                }
+            }
+        }
+        if let Some(exited) = exited_at {
+            if reader_done || exited.elapsed() >= Duration::from_secs(2) {
+                break;
+            }
         }
 
         thread::sleep(FIXTURE_POLL_INTERVAL);
@@ -1969,19 +1990,34 @@ fn native_external_protocol_runtime_fixture_flow() {
         run_external_protocol_fixture(&telnet_host, "TELNET_INPUT:status", Some("status"));
     assert!(telnet_output.contains("TELNET:legacy.internal:2323"));
     assert!(telnet_output.contains("TELNET_INPUT:status"));
-    assert!(telnet_output
-        .replace("\r\n", "\n")
-        .trim()
-        .ends_with("TELNET:legacy.internal:2323\nTELNET_INPUT:status"));
+    // Order, not adjacency: on a busy machine the terminal's echo of the typed
+    // "status" can land between the two lines.
+    let telnet_normalized = telnet_output.replace("\r\n", "\n");
+    let telnet_normalized = telnet_normalized.trim();
+    let banner_at = telnet_normalized
+        .find("TELNET:legacy.internal:2323")
+        .expect("telnet banner");
+    assert!(
+        telnet_normalized.ends_with("TELNET_INPUT:status")
+            && banner_at < telnet_normalized.rfind("TELNET_INPUT:status").unwrap_or(0),
+        "{telnet_normalized:?}"
+    );
 
     let serial_output =
         run_external_protocol_fixture(&serial_host, "SERIAL_INPUT:ping", Some("ping"));
     assert!(serial_output.contains("SERIAL:/dev/cu.fixture:115200"));
     assert!(serial_output.contains("SERIAL_INPUT:ping"));
-    assert!(serial_output
-        .replace("\r\n", "\n")
-        .trim()
-        .ends_with("SERIAL:/dev/cu.fixture:115200\nSERIAL_INPUT:ping"));
+    // Order, not adjacency (see the telnet check above).
+    let serial_normalized = serial_output.replace("\r\n", "\n");
+    let serial_normalized = serial_normalized.trim();
+    let serial_banner_at = serial_normalized
+        .find("SERIAL:/dev/cu.fixture:115200")
+        .expect("serial banner");
+    assert!(
+        serial_normalized.ends_with("SERIAL_INPUT:ping")
+            && serial_banner_at < serial_normalized.rfind("SERIAL_INPUT:ping").unwrap_or(0),
+        "{serial_normalized:?}"
+    );
 
     let mosh_output = run_external_protocol_fixture(&mosh_host, "MOSH_AUTH:fixture-secret", None);
     assert!(mosh_output.contains("MOSH:ops@ops.internal:"));
