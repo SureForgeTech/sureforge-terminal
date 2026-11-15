@@ -315,6 +315,34 @@ describe("createTerminalPaneNativeSessionController", () => {
     expect(setPaneState).toHaveBeenLastCalledWith("pane-1", "error", refusal);
   });
 
+  it("a refused login is not retried, and Reconnect still starts a new session", async () => {
+    const sockets: FakeSocket[] = [];
+    createBackendSession
+      .mockResolvedValueOnce({ sessionId: "session-1" })
+      .mockResolvedValueOnce({ sessionId: "session-2" });
+    openBackendSessionSocket.mockImplementation(async () => {
+      const socket = new FakeSocket();
+      sockets.push(socket);
+      return socket;
+    });
+    const setPaneState = vi.fn();
+    const controller = makeController(setPaneState);
+
+    await controller.connectNativeSession();
+    sockets[0]!.dispatch("message", { data: JSON.stringify({ type: "status", state: "connected" }) });
+    const refusal = "All configured authentication methods failed";
+    sockets[0]!.dispatch("message", { data: JSON.stringify({ type: "error", message: refusal }) });
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    // No automatic retry: retrying a refused login can lock the account.
+    expect(createBackendSession).toHaveBeenCalledTimes(1);
+    expect(setPaneState).toHaveBeenLastCalledWith("pane-1", "error", refusal);
+    // The open socket was closed, so a manual Reconnect is not swallowed.
+    expect(sockets[0]!.close).toHaveBeenCalled();
+    await controller.connectNativeSession();
+    expect(createBackendSession).toHaveBeenCalledTimes(2);
+  });
+
   it("#510: a restored session refused for a changed host key does not reconnect on close", async () => {
     createBackendSession.mockResolvedValueOnce({ sessionId: "session-2" });
     const socket = new FakeSocket();

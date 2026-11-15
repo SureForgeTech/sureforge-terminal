@@ -394,8 +394,8 @@ export function createTerminalPaneNativeSessionController(options: TerminalPaneN
         }
 
         clearBackendSession();
-        // The same retry rule as a failed connect: a changed host key is
-        // never retried, the user has to re-scan and trust it first.
+        // The same retry rule as a failed connect: a changed host key or a
+        // refused login is never retried; the user has to fix it first.
         if (
           shouldScheduleReconnect(classifySshError(message.message).category, {
             connectedOnce: connectedOnceRef.current,
@@ -404,6 +404,15 @@ export function createTerminalPaneNativeSessionController(options: TerminalPaneN
         ) {
           scheduleReconnect(message.message);
           return;
+        }
+
+        // Not retrying: the browser backend leaves its socket open after a
+        // failed session, and an open socket makes Reconnect return without
+        // connecting. Close it the way the retry path does; the close handler
+        // ignores a socket that is no longer the current one.
+        if (socketRef.current === socket) {
+          socketRef.current = null;
+          socket.close();
         }
 
         terminal.writeln(`\r\n${message.message}`);
