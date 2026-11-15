@@ -2160,7 +2160,38 @@ pub(crate) fn create_native_forward(
         },
     );
 
+    // Opening the forward's connection can take seconds. If the session
+    // closed meanwhile, its cleanup ran before this forward was registered
+    // and could not close it, so it would outlive the session, unlisted,
+    // until the app quit.
+    if discard_forward_if_session_closed(
+        native_sessions,
+        native_forwards,
+        &request.session_id,
+        &forward_id,
+    ) {
+        return Err("The session closed while the port forward was starting.".to_string());
+    }
+
     Ok(record)
+}
+
+/// Close and remove a just-registered forward whose session is gone. Session
+/// teardown removes the session before closing its forwards, so together with
+/// this check every forward is closed by one side or the other.
+pub(crate) fn discard_forward_if_session_closed(
+    native_sessions: &NativeSessionRegistry,
+    native_forwards: &NativeForwardRegistry,
+    session_id: &str,
+    forward_id: &str,
+) -> bool {
+    if get_native_session(native_sessions, session_id).is_some() {
+        return false;
+    }
+    if let Some(handle) = remove_native_forward(native_forwards, forward_id) {
+        close_native_forward_handle(handle);
+    }
+    true
 }
 
 pub(crate) fn delete_native_forward(

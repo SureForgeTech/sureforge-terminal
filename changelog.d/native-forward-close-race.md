@@ -1,0 +1,1 @@
+- [FIX] In the native app, a port forward started while its session was closing is now closed instead of running unlisted until the app quits
