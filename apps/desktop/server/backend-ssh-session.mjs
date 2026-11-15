@@ -258,6 +258,10 @@ export function createSshSessionManager({
       const onShellReady = (error, stream) => {
         if (error) {
           failSession(session, error);
+          // Nothing can be done with a connection whose shell was refused.
+          // Ending it lets the client's close handler retire the session
+          // (it used to stay open, with its session, indefinitely).
+          session.client.end();
           return;
         }
 
@@ -328,7 +332,9 @@ export function createSshSessionManager({
       // The connection ended before a shell opened (a refused login, an
       // unreachable host, a rejected host key). Nothing else would ever
       // remove it, so keep it only long enough to report the failure to a
-      // websocket that has not attached yet.
+      // websocket that has not attached yet. The jump connection has nothing
+      // left to carry, so it ends now rather than at removal.
+      session.jumpClient?.end();
       if (!session.retireTimer && sessions.get(session.id) === session) {
         session.retireTimer = setTimeout(() => {
           session.retireTimer = null;

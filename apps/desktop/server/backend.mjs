@@ -1171,7 +1171,8 @@ server.on("upgrade", (request, socket, head) => {
       // seen the failure and gone; nothing else would remove it.
       // (Its state moves on to "disconnected" when the connection closes, so
       // the failure is recognised by its message and the missing shell.)
-      if (session.failureMessage && !session.stream) {
+      // Only when no newer websocket has attached in the meantime.
+      if (session.ws === null && session.failureMessage && !session.stream) {
         void retireSession(session);
       }
     });
