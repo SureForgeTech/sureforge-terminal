@@ -352,6 +352,30 @@ async function main() {
       snippet.status === 200 && result?.ok === true && result?.stdout?.includes(execMarker),
       `status ${snippet.status} body ${snippet.text.slice(0, 300)}`);
 
+    // MAINT-5 (2026-10-29 review): the stderrSemantics corpus says the Node
+    // backend reports the remote's stderr only, separately from stdout. Run a
+    // command that writes to both and exits 4, and check exactly that.
+    const streams = await api("/api/backend/snippets/execute", {
+      method: "POST",
+      token: TOKEN,
+      body: {
+        command: "printf 'to-stdout'; printf 'to-stderr' >&2; exit 4",
+        targets: [{ id: "fixture", label: "fixture", host: fixtureHost() }],
+      },
+    });
+    const streamsResult = streams.json?.results?.[0];
+    check("exec keeps the remote's stderr out of stdout",
+      streams.status === 200 &&
+        streamsResult?.stdout?.endsWith("to-stdout") &&
+        !streamsResult?.stdout?.includes("to-stderr"),
+      `status ${streams.status} body ${streams.text.slice(0, 300)}`);
+    check("exec reports the remote's stderr on its own",
+      streamsResult?.stderr === "to-stderr",
+      `stderr ${JSON.stringify(streamsResult?.stderr)}`);
+    check("exec carries a non-zero exit code and is not ok",
+      streamsResult?.exitCode === 4 && streamsResult?.ok === false,
+      `exitCode ${streamsResult?.exitCode} ok ${streamsResult?.ok}`);
+
     console.log("[client] sftp endpoint");
     const listing = await api("/api/backend/sftp/list", {
       method: "POST",
