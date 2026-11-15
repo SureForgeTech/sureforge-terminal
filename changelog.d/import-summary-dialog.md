@@ -1,0 +1,1 @@
+- [FIX] The SSH config import summary now takes keyboard focus, closes on Escape and returns focus when closed, like every other dialog

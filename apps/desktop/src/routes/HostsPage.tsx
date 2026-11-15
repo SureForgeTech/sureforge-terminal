@@ -13,6 +13,7 @@ import { HostFilterBar } from "../components/hosts/HostFilterBar";
 import { HostList } from "../components/hosts/HostList";
 import { ImportSshCallout } from "../components/hosts/ImportSshCallout";
 import { WelcomePanel } from "../components/hosts/WelcomePanel";
+import { SshImportReportDialog } from "../components/hosts/SshImportReportDialog";
 import { ConfirmDialog } from "../components/common/ConfirmDialog";
 import {
   formatHostProtocol,
@@ -550,83 +551,7 @@ export function HostsPage() {
         }}
       />
 
-      {importReport ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="ssh-import-report-title"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4"
-          onClick={() => setImportReport(null)}
-        >
-          <div
-            className="w-full max-w-lg rounded-2xl border border-slate-800 bg-slate-950 p-5 text-sm text-slate-200 shadow-2xl"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <h2 id="ssh-import-report-title" className="text-base font-semibold text-white">
-              SSH config import summary
-            </h2>
-            <ul className="mt-3 space-y-1 text-slate-300">
-              <li>
-                Imported <strong className="text-white">{importReport.importedCount}</strong> host
-                {importReport.importedCount === 1 ? "" : "s"}.
-              </li>
-              {importReport.defaultsAppliedCount > 0 ? (
-                <li>
-                  Inherited defaults from <code>Host *</code> on{" "}
-                  <strong className="text-white">{importReport.defaultsAppliedCount}</strong> host
-                  {importReport.defaultsAppliedCount === 1 ? "" : "s"}.
-                </li>
-              ) : null}
-              {importReport.missingUsernameAliases.length > 0 ? (
-                <li>
-                  No username, so these cannot connect until you add one:{" "}
-                  <span className="text-amber-300">
-                    {importReport.missingUsernameAliases.join(", ")}
-                  </span>
-                </li>
-              ) : null}
-              {importReport.unresolvedProxyJumpAliases.length > 0 ? (
-                <li>
-                  ProxyJump targets not present in the file (assign manually):{" "}
-                  <span className="text-amber-300">
-                    {importReport.unresolvedProxyJumpAliases.join(", ")}
-                  </span>
-                </li>
-              ) : null}
-            </ul>
-            {importReport.skipped.length > 0 ? (
-              <div className="mt-3 rounded-xl border border-amber-700/40 bg-amber-950/30 p-3">
-                <p className="text-xs uppercase tracking-wider text-amber-300">
-                  Skipped ({importReport.skipped.length})
-                </p>
-                <ul className="mt-2 max-h-40 overflow-y-auto space-y-1 text-xs text-amber-100/90">
-                  {importReport.skipped.slice(0, 25).map((entry, index) => (
-                    <li key={`${entry.reason}-${index}`}>
-                      <span className="text-amber-300">{entry.reason}:</span> {entry.detail}
-                    </li>
-                  ))}
-                  {importReport.skipped.length > 25 ? (
-                    <li className="text-amber-300/80">
-                      …and {importReport.skipped.length - 25} more
-                    </li>
-                  ) : null}
-                </ul>
-              </div>
-            ) : null}
-            <div className="mt-4 flex justify-end">
-              {/* #111: dismiss is a neutral action — accent is reserved for
-                  the single primary action per view. */}
-              <button
-                type="button"
-                onClick={() => setImportReport(null)}
-                className="rounded-xl border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-200 transition hover:border-slate-500 hover:text-white"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <SshImportReportDialog report={importReport} onClose={() => setImportReport(null)} />
     </>
   );
 }
