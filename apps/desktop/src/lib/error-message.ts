@@ -7,24 +7,33 @@
  * that into "[object Object]". Every caller that shows or logs an error goes
  * through this instead.
  */
-export function errorMessageFromUnknown(error: unknown): string {
+/** Shown when a failure carries no usable text, so an error is never blank. */
+export const UNKNOWN_ERROR_MESSAGE = "The action failed, and no reason was given.";
+
+export function errorMessageFromUnknown(
+  error: unknown,
+  fallback: string = UNKNOWN_ERROR_MESSAGE
+): string {
+  let message = "";
   if (error instanceof Error) {
-    return error.message;
+    message = error.message;
+  } else if (typeof error === "string") {
+    message = error;
+  } else if (typeof error === "object" && error !== null && "message" in error) {
+    const value = (error as { message: unknown }).message;
+    message = typeof value === "string" ? value : "";
+  } else if (typeof error === "number" || typeof error === "boolean") {
+    message = String(error);
   }
-  if (typeof error === "string") {
-    return error;
-  }
-  if (typeof error === "object" && error !== null && "message" in error) {
-    const { message } = error as { message: unknown };
-    return typeof message === "string" ? message : String(message ?? "");
-  }
-  return String(error ?? "");
+  // A blank message would hide an error banner that renders only when its
+  // text is non-empty, and "[object Object]" tells nobody anything.
+  return message.trim() ? message : fallback;
 }
 
 /**
  * The Node backend answers a failed request with `{"error": "..."}`. Show the
  * message, not the JSON. A body that is not that shape is shown as it is, and
- * an empty body falls back to the status code.
+ * an empty body or empty message falls back to the status code.
  */
 export function backendErrorMessageFromBody(body: string, status: number): string {
   if (body) {
@@ -35,7 +44,8 @@ export function backendErrorMessageFromBody(body: string, status: number): strin
         typeof parsed === "object" &&
         typeof (parsed as { error?: unknown }).error === "string"
       ) {
-        return (parsed as { error: string }).error;
+        const message = (parsed as { error: string }).error;
+        return message.trim() ? message : `Backend request failed: ${status}`;
       }
     } catch {
       // Not JSON: keep the raw text.

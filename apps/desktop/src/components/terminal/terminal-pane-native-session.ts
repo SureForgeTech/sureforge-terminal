@@ -476,7 +476,7 @@ export function createTerminalPaneNativeSessionController(options: TerminalPaneN
       // progress, which left a failed retry stuck on "connecting".
       connectingRef.current = false;
       const classified = classifySshError(error);
-      const raw = classified.raw || (errorMessageFromUnknown(error));
+      const raw = classified.raw || errorMessageFromUnknown(error);
       const friendly = classified.hint
         ? `${classified.message} ${classified.hint}`
         : classified.message;

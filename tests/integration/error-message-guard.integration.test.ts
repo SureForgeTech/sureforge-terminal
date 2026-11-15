@@ -5,12 +5,12 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * Guard (#485): the pattern below turned typed IPC rejections into "[object Object]"
+ * Guard (#485): an `instanceof Error` check with a hand-written fallback turned typed IPC rejections into "[object Object]"
  * in sixteen places. It must not come back; use errorMessageFromUnknown (apps/desktop/src/lib/error-message.ts).
  */
 describe("no hand-rolled error-to-text conversions", () => {
   const sourceRoot = join(fileURLToPath(new URL(".", import.meta.url)), "../../apps/desktop/src");
-  const pattern = /instanceof Error \? [\w.]+\.message : String\(/;
+  const pattern = /instanceof Error\s*\?\s*[\w.]+\.message\s*:/;
 
   function sourceFiles(dir: string): string[] {
     return readdirSync(dir).flatMap((name: string) => {

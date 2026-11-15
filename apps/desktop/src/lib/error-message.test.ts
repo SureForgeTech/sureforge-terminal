@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { backendErrorMessageFromBody, errorMessageFromUnknown } from "./error-message";
+import {
+  backendErrorMessageFromBody,
+  errorMessageFromUnknown,
+  UNKNOWN_ERROR_MESSAGE,
+} from "./error-message";
 
 describe("errorMessageFromUnknown", () => {
   it("reads an Error, a string, and a typed { code, message } IPC rejection", () => {
@@ -17,10 +21,11 @@ describe("errorMessageFromUnknown", () => {
     );
   });
 
-  it("handles empty values without throwing", () => {
-    expect(errorMessageFromUnknown(undefined)).toBe("");
-    expect(errorMessageFromUnknown(null)).toBe("");
-    expect(errorMessageFromUnknown({ message: null })).toBe("");
+  it("never returns blank text or [object Object]", () => {
+    for (const value of [undefined, null, "", "   ", { message: null }, { message: "" }, { reason: "x" }, new Error("")]) {
+      expect(errorMessageFromUnknown(value)).toBe(UNKNOWN_ERROR_MESSAGE);
+    }
+    expect(errorMessageFromUnknown({ reason: "x" }, "Custom fallback.")).toBe("Custom fallback.");
   });
 });
 
@@ -36,7 +41,8 @@ describe("backendErrorMessageFromBody", () => {
     expect(backendErrorMessageFromBody('{"detail":"x"}', 400)).toBe('{"detail":"x"}');
   });
 
-  it("falls back to the status for an empty body", () => {
+  it("falls back to the status for an empty body or an empty message", () => {
     expect(backendErrorMessageFromBody("", 503)).toBe("Backend request failed: 503");
+    expect(backendErrorMessageFromBody('{"error":""}', 500)).toBe("Backend request failed: 500");
   });
 });

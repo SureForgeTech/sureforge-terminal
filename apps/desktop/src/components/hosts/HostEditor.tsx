@@ -24,6 +24,7 @@ import { useHostsStore } from "../../store/hosts-store";
 import { useIdentitiesStore } from "../../store/identities-store";
 import type { IdentityRecord } from "../../types/identity";
 import { Modal } from "../common/Modal";
+import { errorMessageFromUnknown } from "../../lib/error-message";
 
 interface HostEditorProps {
   open: boolean;
@@ -242,10 +243,10 @@ function HostEditorContent({
           protocol,
           status: {
             available: false,
-            message:
-              error instanceof Error
-                ? error.message
-                : "Unable to determine protocol runtime availability.",
+            message: errorMessageFromUnknown(
+              error,
+              "Unable to determine protocol runtime availability."
+            ),
           },
         });
       });
