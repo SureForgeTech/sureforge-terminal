@@ -312,7 +312,6 @@ async function closeLocalForward(forwardId) {
   } else {
     const session = sessions.get(forward.sessionId);
     if (session) {
-      session.client.off("tcp connection", forward.onConnection);
       await new Promise((resolve, reject) => {
         session.client.unforwardIn(forward.remoteHost, forward.remotePort, (error) => {
           if (error) {
@@ -410,12 +409,7 @@ async function createRemoteForward({ localHost, localPort, remoteHost, remotePor
     onConnection: null,
   };
 
-  forward.onConnection = (details, accept, reject) => {
-    if (details.destIP !== forward.remoteHost || details.destPort !== forward.remotePort) {
-      reject();
-      return;
-    }
-
+  forward.onConnection = (accept) => {
     const upstream = accept();
     const localSocket = connectNet(forward.localPort, forward.localHost);
 
@@ -425,27 +419,50 @@ async function createRemoteForward({ localHost, localPort, remoteHost, remotePor
     localSocket.on("error", () => upstream.destroy());
   };
 
-  session.client.on("tcp connection", forward.onConnection);
+  ensureRemoteForwardDispatcher(session);
 
-  try {
-    const assignedPort = await new Promise((resolve, reject) => {
-      session.client.forwardIn(remoteHost, remotePort, (error, boundPort) => {
-        if (error) {
-          reject(error);
-          return;
-        }
+  const assignedPort = await new Promise((resolve, reject) => {
+    session.client.forwardIn(remoteHost, remotePort, (error, boundPort) => {
+      if (error) {
+        reject(error);
+        return;
+      }
 
-        resolve(boundPort ?? remotePort);
-      });
+      resolve(boundPort ?? remotePort);
     });
+  });
 
-    forward.remotePort = assignedPort;
-    forwards.set(forward.id, forward);
-    return serializeForward(forward);
-  } catch (error) {
-    session.client.off("tcp connection", forward.onConnection);
-    throw error;
+  forward.remotePort = assignedPort;
+  forwards.set(forward.id, forward);
+  return serializeForward(forward);
+}
+
+/**
+ * One "tcp connection" listener per session, which hands each incoming
+ * connection to the remote forward it belongs to. Each forward used to add
+ * its own listener that rejected connections for any other port; ssh2 tears
+ * a channel down on reject() even after another listener accepted it, so
+ * with two remote forwards on one session neither carried traffic.
+ */
+function ensureRemoteForwardDispatcher(session) {
+  if (session.remoteForwardDispatcher) {
+    return;
   }
+  session.remoteForwardDispatcher = (details, accept, reject) => {
+    const forward = Array.from(forwards.values()).find(
+      (candidate) =>
+        candidate.direction === "remote" &&
+        candidate.sessionId === session.id &&
+        candidate.remoteHost === details.destIP &&
+        candidate.remotePort === details.destPort
+    );
+    if (!forward) {
+      reject();
+      return;
+    }
+    forward.onConnection(accept);
+  };
+  session.client.on("tcp connection", session.remoteForwardDispatcher);
 }
 
 async function inspectKey(pathname) {

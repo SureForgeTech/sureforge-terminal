@@ -1,0 +1,1 @@
+- [FIX] In browser mode, two remote port forwards on the same session now both work; before, each blocked the other's connections

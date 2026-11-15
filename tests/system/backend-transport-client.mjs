@@ -1,3 +1,4 @@
+import net from "node:net";
 // #185: drives the REAL backend.mjs over its actual HTTP and WebSocket surface.
 //
 // Started by scripts/backend-transport-test.sh, which owns the sshd fixture and
@@ -334,6 +335,62 @@ async function main() {
     const terminal = await driveTerminal(sessionId, `printf '%s\\n' ${marker}\n`, marker);
     check("terminal input reached the remote and its output came back",
       terminal.output.includes(marker));
+
+    console.log("[client] two remote forwards on one session");
+    // Found in a bug hunt on 2026-11-14: each remote forward added its own
+    // "tcp connection" listener, and each listener rejected connections meant
+    // for the others, so with two forwards neither carried traffic.
+    const servers = [];
+    const answer = (reply) =>
+      new Promise((resolve) => {
+        const server = net.createServer((socket) => socket.end(reply));
+        server.listen(0, "127.0.0.1", () => resolve(server));
+      });
+    const readFrom = (port) =>
+      new Promise((resolve) => {
+        const socket = net.connect(port, "127.0.0.1");
+        let text = "";
+        socket.setTimeout(5000, () => socket.destroy());
+        socket.on("data", (chunk) => (text += chunk.toString("utf8")));
+        socket.on("close", () => resolve(text));
+        socket.on("error", () => resolve(text));
+      });
+    try {
+      servers.push(await answer("from-local-a"), await answer("from-local-b"));
+      const made = [];
+      for (const server of servers) {
+        const response = await api("/api/backend/forwards", {
+          method: "POST",
+          token: TOKEN,
+          body: {
+            direction: "remote",
+            sessionId,
+            localHost: "127.0.0.1",
+            localPort: server.address().port,
+            remoteHost: "127.0.0.1",
+            remotePort: 0,
+          },
+        });
+        made.push(response);
+      }
+      check("both remote forwards were created",
+        made.every((response) => response.status === 200 && response.json?.remotePort > 0),
+        made.map((response) => `${response.status} ${response.text.slice(0, 120)}`).join(" | "));
+      const [first, second] = made.map((response) => response.json?.remotePort);
+      check("the first remote forward carries its own traffic",
+        (await readFrom(first)) === "from-local-a");
+      check("the second remote forward carries its own traffic",
+        (await readFrom(second)) === "from-local-b");
+      for (const response of made) {
+        if (response.json?.id) {
+          await api(`/api/backend/forwards/${response.json.id}`, { method: "DELETE", token: TOKEN });
+        }
+      }
+    } finally {
+      for (const server of servers) {
+        server.close();
+      }
+    }
 
     console.log("[client] exec endpoint");
     // A different code path from the interactive shell: this is ssh2's
