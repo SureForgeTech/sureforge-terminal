@@ -1,0 +1,1 @@
+- [FIX] Failed connections in the native app now show the right reason and hint (name did not resolve, timed out, network unreachable, password refused, host key changed) instead of an unknown error

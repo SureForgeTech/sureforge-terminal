@@ -33,6 +33,16 @@ interface ClassifierRule {
 }
 
 const RULES: ClassifierRule[] = [
+  // First: a DNS failure message can quote other errors in its tail.
+  {
+    category: "dns_failure",
+    // OpenSSH prints "Could not resolve hostname x: nodename nor servname
+    // provided, or not known" (macOS) or "...: Name or service not known".
+    match: /(?:ENOTFOUND|EAI_AGAIN|getaddrinfo|Could not resolve hostname|nodename nor servname|Name or service not known)/i,
+    message: "Hostname did not resolve.",
+    hint:
+      "DNS lookup failed. Confirm the hostname is spelled correctly. If it's an internal name, you may need VPN or split DNS.",
+  },
   // Authentication failures — ssh2 surfaces a few flavors.
   {
     category: "auth_failed",
@@ -40,6 +50,17 @@ const RULES: ClassifierRule[] = [
     message: "Authentication failed.",
     hint:
       "Check the username, key path, and passphrase. If you're using a key, make sure the matching public key is in the remote ~/.ssh/authorized_keys.",
+  },
+  {
+    // OpenSSH (native app) when the password or interactive login is refused
+    // (the method list includes password, so it is checked before the
+    // publickey-only rule below),
+    // or when the agent offers too many keys before the right one.
+    category: "auth_failed",
+    match: /(?:Permission denied \([^)]*(?:password|keyboard-interactive)|Too many authentication failures)/i,
+    message: "Authentication failed.",
+    hint:
+      "Check the username, password and key. If many keys are loaded in your SSH agent, the server may give up before trying the right one: set this host's key explicitly.",
   },
   {
     category: "auth_failed",
@@ -58,7 +79,8 @@ const RULES: ClassifierRule[] = [
   // Host key mismatch.
   {
     category: "host_key_mismatch",
-    match: /(?:Host key verification failed|server presented a different host key|host key.*does not match)/i,
+    // OpenSSH (native app) prints "REMOTE HOST IDENTIFICATION HAS CHANGED".
+    match: /(?:Host key verification failed|server presented a different host key|host key.*does not match|REMOTE HOST IDENTIFICATION HAS CHANGED)/i,
     message: "Host key has changed.",
     hint:
       "The server's key no longer matches the one you trusted. Either the host was rebuilt, or this is a MITM. Re-scan the host in Keys → Known hosts and confirm the new fingerprint before reconnecting.",
@@ -66,7 +88,8 @@ const RULES: ClassifierRule[] = [
   // Network issues.
   {
     category: "network_unreachable",
-    match: /(?:ENETUNREACH|EHOSTUNREACH|no route to host)/i,
+    // Node error codes (browser backend) and OpenSSH's wording (native app).
+    match: /(?:ENETUNREACH|EHOSTUNREACH|no route to host|Network is unreachable)/i,
     message: "Network unreachable.",
     hint:
       "Your machine couldn't reach the host's network. Check VPN, Wi-Fi, or firewall — the address resolves but the route doesn't.",
@@ -80,17 +103,11 @@ const RULES: ClassifierRule[] = [
   },
   {
     category: "timeout",
-    match: /(?:ETIMEDOUT|connection timed out|Connection timed out)/i,
+    // macOS OpenSSH says "Operation timed out" for a connect timeout.
+    match: /(?:ETIMEDOUT|connection timed out|Operation timed out)/i,
     message: "Connection timed out.",
     hint:
       "Reached the host but never got a response. Check the firewall and any cloud security-group rules. If this host is behind a bastion, configure it in Jump host.",
-  },
-  {
-    category: "dns_failure",
-    match: /(?:ENOTFOUND|EAI_AGAIN|getaddrinfo)/i,
-    message: "Hostname did not resolve.",
-    hint:
-      "DNS lookup failed. Confirm the hostname is spelled correctly. If it's an internal name, you may need VPN or split DNS.",
   },
 ];
 

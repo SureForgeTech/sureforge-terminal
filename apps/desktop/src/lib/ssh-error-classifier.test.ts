@@ -63,6 +63,30 @@ describe("classifySshError", () => {
     expect(classifySshError(undefined).message).toBeTruthy();
   });
 
+  // The native app passes OpenSSH's own wording through; these used to fall
+  // through to "unknown" and lose their hint.
+  it.each([
+    ["ssh: Could not resolve hostname db.invalid: nodename nor servname provided, or not known", "dns_failure"],
+    ["ssh: Could not resolve hostname db.invalid: Name or service not known", "dns_failure"],
+    ["ssh: connect to host 10.0.0.9 port 22: Operation timed out", "timeout"],
+    ["ssh: connect to host 10.0.0.9 port 22: Network is unreachable", "network_unreachable"],
+    ["ssh: connect to host 10.0.0.9 port 22: Connection refused", "refused"],
+    ["ops@10.0.0.9: Permission denied (password).", "auth_failed"],
+    ["ops@10.0.0.9: Permission denied (publickey,password).", "auth_failed"],
+    ["ops@10.0.0.9: Permission denied (keyboard-interactive).", "auth_failed"],
+    ["Received disconnect from 10.0.0.9 port 22:2: Too many authentication failures", "auth_failed"],
+    ["@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@", "host_key_mismatch"],
+  ])("classifies OpenSSH wording %j", (raw, category) => {
+    expect(classifySshError(new Error(raw)).category).toBe(category);
+  });
+
+  it("does not treat a remote file's permission error as a login failure", () => {
+    // SFTP prints this for a file the user may not touch; the login worked.
+    expect(classifySshError(new Error('remote mkdir "/etc/x": Permission denied')).category).toBe(
+      "unknown"
+    );
+  });
+
   describe("typed IpcError objects (#203)", () => {
     it("reads a timeout code before any prose rule", () => {
       const result = classifySshError({ code: "timeout", message: "could not connect to h:22: x" });

@@ -11,8 +11,14 @@ describe("shouldScheduleReconnect (#373)", () => {
     ).toBe(false);
   });
 
+  it("never retries a refused login, which could lock the account", () => {
+    expect(
+      shouldScheduleReconnect("auth_failed", { connectedOnce: true, reconnectOnRestore: true })
+    ).toBe(false);
+  });
+
   it("keeps the previous behaviour for every other category", () => {
-    for (const category of ["timeout", "refused", "auth_failed", "network_unreachable", "dns_failure", "unknown"] as const) {
+    for (const category of ["timeout", "refused", "network_unreachable", "dns_failure", "unknown"] as const) {
       expect(shouldScheduleReconnect(category, { connectedOnce: true, reconnectOnRestore: false })).toBe(true);
       expect(shouldScheduleReconnect(category, { connectedOnce: false, reconnectOnRestore: true })).toBe(true);
       expect(shouldScheduleReconnect(category, { connectedOnce: false, reconnectOnRestore: false })).toBe(false);
