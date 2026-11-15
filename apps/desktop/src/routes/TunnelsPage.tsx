@@ -14,6 +14,7 @@ import { useHostsStore } from "../store/hosts-store";
 import { useSessionsStore } from "../store/sessions-store";
 import type { PortForwardRecord } from "../types/forward";
 import { errorMessageFromUnknown } from "../lib/error-message";
+import { collectForwardSessions } from "../lib/forward-sessions";
 
 interface ForwardRow {
   forward: PortForwardRecord;
@@ -29,25 +30,12 @@ export function TunnelsPage() {
   const [errorMessage, setErrorMessage] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
 
-  // Sessions that have a non-empty backendSessionId are the candidates
-  // for forward enumeration. Group by host so we can label rows even
-  // if a session tab is later closed.
-  const activeSessions = useMemo(() => {
-    const seen = new Set<string>();
-    const out: { sessionId: string; hostId: string }[] = [];
-    for (const tab of sessionTabs) {
-      const pane = sessionPanes[tab.activePaneId];
-      if (!pane || !pane.backendSessionId) {
-        continue;
-      }
-      if (seen.has(pane.backendSessionId)) {
-        continue;
-      }
-      seen.add(pane.backendSessionId);
-      out.push({ sessionId: pane.backendSessionId, hostId: tab.hostId });
-    }
-    return out;
-  }, [sessionPanes, sessionTabs]);
+  // Every pane's live backend session is a candidate for forward
+  // enumeration (see collectForwardSessions).
+  const activeSessions = useMemo(
+    () => collectForwardSessions(sessionTabs, sessionPanes),
+    [sessionPanes, sessionTabs]
+  );
 
   const refresh = useCallback(async () => {
     setBusy(true);
