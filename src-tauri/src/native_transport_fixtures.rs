@@ -2339,3 +2339,32 @@ fn test_require_trusted_still_rejects_mismatch() {
         "requireTrusted must never fall through to the TOFU store"
     );
 }
+
+/// #483: the jump-host PTY session loop, end to end, through a real jump sshd
+/// to a real target. The unit tests in `pty_session_loop_tests` cover its
+/// failure and teardown paths against closed ports; this one covers the paths
+/// that need a live login: the passphrase prompt the loop answers itself, the
+/// remote environment command, input, resize and a clean exit.
+#[test]
+#[ignore = "requires an unsandboxed localhost sshd runtime"]
+fn jump_host_session_loop_runs_a_live_session_through_the_jump_sshd() {
+    let fixture = NativeTransportFixture::new();
+    let run = crate::pty_session_loop_tests::start_jump(fixture.jump_target_host.clone(), None);
+
+    run.send(NativeSessionCommand::Resize {
+        cols: 113,
+        rows: 41,
+    });
+    run.send(NativeSessionCommand::Input(
+        "printf 'env:%s:size:%s:end\\n' \"$TERMSNIP_FIXTURE\" \"$(stty size)\"; exit\n".to_string(),
+    ));
+    run.sink.wait_for_output("env:jump-target:size:41 113:end");
+    run.finish();
+
+    assert!(run.sink.errors().is_empty(), "{:?}", run.sink.errors());
+    assert_eq!(
+        run.sink.statuses(),
+        vec!["connected".to_string(), "disconnected".to_string()]
+    );
+    crate::pty_session_loop_tests::assert_torn_down(&run);
+}

@@ -761,7 +761,7 @@ pub(crate) fn create_native_ssh_session_dir(session_id: &str) -> Result<PathBuf,
 }
 
 #[cfg(unix)]
-fn native_ssh_session_root() -> Result<PathBuf, String> {
+pub(crate) fn native_ssh_session_root() -> Result<PathBuf, String> {
     let home = env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| "HOME env var is not set".to_string())?;
@@ -798,7 +798,7 @@ fn native_ssh_session_root_from(temp_root: PathBuf, home: PathBuf) -> Result<Pat
 }
 
 #[cfg(not(unix))]
-fn native_ssh_session_root() -> Result<PathBuf, String> {
+pub(crate) fn native_ssh_session_root() -> Result<PathBuf, String> {
     Ok(env::temp_dir())
 }
 

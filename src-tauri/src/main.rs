@@ -1183,15 +1183,28 @@ fn build_external_command_session_spec(
     }
 }
 
-fn emit_session_stream_event(app: &AppHandle, event: SessionStreamEvent) {
-    // Log a dropped emit instead of swallowing it: losing a "close" event, for
-    // example, leaves the UI showing a connected tab for a session that has
-    // actually ended. `kind` is a &'static str, so capturing it before the move
-    // adds no allocation on the hot output path.
-    let kind = event.kind;
-    if let Err(error) = app.emit(SESSION_STREAM_EVENT_NAME, event) {
-        log::warn!("warning: dropped '{kind}' session stream event: {error}");
+/// #483: where the PTY session loops send their stream events. Production uses
+/// the Tauri `AppHandle`; tests use a recorder, so the loops can run under test
+/// without a window or a Tauri runtime.
+trait SessionEventSink: Send + 'static {
+    fn emit_stream_event(&self, event: SessionStreamEvent);
+}
+
+impl<R: Runtime> SessionEventSink for AppHandle<R> {
+    fn emit_stream_event(&self, event: SessionStreamEvent) {
+        // Log a dropped emit instead of swallowing it: losing a "close" event, for
+        // example, leaves the UI showing a connected tab for a session that has
+        // actually ended. `kind` is a &'static str, so capturing it before the move
+        // adds no allocation on the hot output path.
+        let kind = event.kind;
+        if let Err(error) = self.emit(SESSION_STREAM_EVENT_NAME, event) {
+            log::warn!("warning: dropped '{kind}' session stream event: {error}");
+        }
     }
+}
+
+fn emit_session_stream_event<E: SessionEventSink>(app: &E, event: SessionStreamEvent) {
+    app.emit_stream_event(event);
 }
 
 fn get_native_session(
@@ -1317,8 +1330,8 @@ fn close_native_forwards_for_session(registry: &NativeForwardRegistry, session_i
     }
 }
 
-fn emit_native_session_message(
-    app: &AppHandle,
+fn emit_native_session_message<E: SessionEventSink>(
+    app: &E,
     session_id: &str,
     state: &Arc<Mutex<NativeSessionState>>,
     message: String,
@@ -1352,8 +1365,8 @@ fn emit_native_session_message(
     }
 }
 
-fn set_native_session_connection_state(
-    app: &AppHandle,
+fn set_native_session_connection_state<E: SessionEventSink>(
+    app: &E,
     session_id: &str,
     state: &Arc<Mutex<NativeSessionState>>,
     next_state: &str,
@@ -1371,8 +1384,8 @@ fn set_native_session_connection_state(
     );
 }
 
-fn emit_native_session_output(
-    app: &AppHandle,
+fn emit_native_session_output<E: SessionEventSink>(
+    app: &E,
     session_id: &str,
     state: &Arc<Mutex<NativeSessionState>>,
     output: String,
@@ -1385,8 +1398,8 @@ fn emit_native_session_output(
     );
 }
 
-fn emit_native_session_error(
-    app: &AppHandle,
+fn emit_native_session_error<E: SessionEventSink>(
+    app: &E,
     session_id: &str,
     state: &Arc<Mutex<NativeSessionState>>,
     error: String,
@@ -1875,8 +1888,8 @@ fn spawn_local_session_reader<S: JumpSessionEventSender>(
     });
 }
 
-fn run_external_command_session_loop(
-    app: AppHandle,
+fn run_external_command_session_loop<E: SessionEventSink>(
+    app: E,
     registry: NativeSessionRegistry,
     forward_registry: NativeForwardRegistry,
     session_id: String,
@@ -1884,6 +1897,34 @@ fn run_external_command_session_loop(
     host: BackendHostConnection,
     receiver: Receiver<NativeSessionCommand>,
 ) {
+    run_external_command_session_loop_with_spec(
+        app,
+        registry,
+        forward_registry,
+        session_id,
+        state,
+        host,
+        receiver,
+        build_external_command_session_spec,
+    );
+}
+
+/// #483: the loop body, with the spec builder passed in so tests can launch a
+/// controlled command instead of a real shell, telnet, screen or mosh client.
+#[allow(clippy::too_many_arguments)]
+fn run_external_command_session_loop_with_spec<E, F>(
+    app: E,
+    registry: NativeSessionRegistry,
+    forward_registry: NativeForwardRegistry,
+    session_id: String,
+    state: Arc<Mutex<NativeSessionState>>,
+    host: BackendHostConnection,
+    receiver: Receiver<NativeSessionCommand>,
+    build_spec: F,
+) where
+    E: SessionEventSink,
+    F: FnOnce(&BackendHostConnection, &str) -> Result<ExternalCommandSessionSpec, String>,
+{
     let mut cleanup_dir = None;
     let result = (|| -> Result<(), String> {
         let ExternalCommandSessionSpec {
@@ -1891,7 +1932,7 @@ fn run_external_command_session_loop(
             exit_label,
             prompt_responses,
             cleanup_dir: spec_cleanup_dir,
-        } = build_external_command_session_spec(&host, &session_id)?;
+        } = build_spec(&host, &session_id)?;
         cleanup_dir = spec_cleanup_dir.clone();
         let pty_system = native_pty_system();
         let pair = pty_system
@@ -2107,8 +2148,8 @@ fn run_external_command_session_loop(
     }
 }
 
-fn run_jump_host_session_loop(
-    app: AppHandle,
+fn run_jump_host_session_loop<E: SessionEventSink>(
+    app: E,
     registry: NativeSessionRegistry,
     forward_registry: NativeForwardRegistry,
     session_id: String,
@@ -5276,6 +5317,9 @@ mod native_transport_conformance_tests;
 
 #[cfg(test)]
 mod native_transport_fixtures;
+
+#[cfg(test)]
+mod pty_session_loop_tests;
 
 #[cfg(test)]
 mod tests {
