@@ -217,4 +217,25 @@ describe("native trust and key tooling API", () => {
       },
     });
   });
+
+  it("shows the backend's error message, not its JSON body, when a browser request fails", async () => {
+    isTauriRuntime.mockReturnValue(false);
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: "Internal server error." }), {
+        headers: { "Content-Type": "application/json" },
+        status: 500,
+      })
+    );
+
+    await expect(listRemoteDirectory(hostFixture, "/")).rejects.toThrow(
+      /^Internal server error\.$/
+    );
+  });
+
+  it("passes a non-JSON browser error body through unchanged", async () => {
+    isTauriRuntime.mockReturnValue(false);
+    fetchMock.mockResolvedValue(new Response("upstream timed out", { status: 502 }));
+
+    await expect(listRemoteDirectory(hostFixture, "/")).rejects.toThrow(/^upstream timed out$/);
+  });
 });

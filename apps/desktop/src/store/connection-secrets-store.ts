@@ -14,6 +14,7 @@ import {
   storeNativeIdentityPassphrase,
   storeNativeKeyPassphrase,
 } from "../lib/native-secrets";
+import { errorMessageFromUnknown } from "../lib/error-message";
 
 export interface ConnectionSecretRecord {
   password: string;
@@ -61,7 +62,7 @@ function logSecretPersistenceError(
   scope: string,
   error: unknown
 ) {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessageFromUnknown(error);
   console.warn(`Failed to ${action} runtime secrets for ${scope}: ${message}`);
 }
 

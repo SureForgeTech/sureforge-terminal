@@ -1,6 +1,7 @@
 import type { StateStorage } from "zustand/middleware";
 import { invokeTauriCommand, isTauriRuntime } from "./backend-runtime";
 import type { VaultDeletionMap } from "../store/vault-sync-store";
+import { errorMessageFromUnknown } from "./error-message";
 
 // #472: native persistence goes through typed commands in
 // src-tauri/src/persistence.rs, which own the table names and every SQL
@@ -183,7 +184,7 @@ async function removeNativeDeletionItem() {
 }
 
 function logPersistenceFallback(action: string, name: string, error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessageFromUnknown(error);
   writeFrontendLog("warn", `[termsnip] SQLite persistence ${action} failed for ${name}: ${message}`);
 }
 
@@ -192,7 +193,7 @@ function logPersistenceFallback(action: string, name: string, error: unknown) {
 // is newer than SQLite is exactly the split-brain that later resurrects stale
 // SQLite rows on read. Log at error level and let the caller re-throw.
 function logPersistenceError(action: string, name: string, error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessageFromUnknown(error);
   writeFrontendLog(
     "error",
     `[termsnip] SQLite persistence ${action} failed for ${name}; not shadow-writing localStorage (SQLite is the source of truth): ${message}`

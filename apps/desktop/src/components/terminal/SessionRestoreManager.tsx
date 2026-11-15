@@ -6,6 +6,7 @@ import { useConnectionSecretsStore } from "../../store/connection-secrets-store"
 import { useHostsStore } from "../../store/hosts-store";
 import { useKnownHostsStore } from "../../store/known-hosts-store";
 import { useSessionsStore } from "../../store/sessions-store";
+import { errorMessageFromUnknown } from "../../lib/error-message";
 
 export function SessionRestoreManager() {
   const restoringPaneIdsRef = useRef(new Set<string>());
@@ -73,7 +74,7 @@ export function SessionRestoreManager() {
             })
             .catch((error) => {
               setPaneBackendSession(pane.id, undefined);
-              const message = error instanceof Error ? error.message : String(error);
+              const message = errorMessageFromUnknown(error);
               setPaneState(pane.id, "error", message);
             })
             .finally(() => {
@@ -82,7 +83,7 @@ export function SessionRestoreManager() {
         } catch (error) {
           restoringPaneIdsRef.current.delete(pane.id);
           setPaneBackendSession(pane.id, undefined);
-          const message = error instanceof Error ? error.message : String(error);
+          const message = errorMessageFromUnknown(error);
           setPaneState(pane.id, "error", message);
         }
       }

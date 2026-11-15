@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { createLocalForward, deleteLocalForward, listLocalForwards } from "../../lib/api";
 import type { PortForwardRecord } from "../../types/forward";
+import { errorMessageFromUnknown } from "../../lib/error-message";
 
 interface PortForwardPanelProps {
   sessionId?: string;
@@ -28,7 +29,7 @@ export function PortForwardPanel({ sessionId, disabled = false }: PortForwardPan
       setForwards(result.forwards);
       setErrorMessage(undefined);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : String(error));
+      setErrorMessage(errorMessageFromUnknown(error));
     }
   }, [sessionId]);
 
@@ -60,7 +61,7 @@ export function PortForwardPanel({ sessionId, disabled = false }: PortForwardPan
       });
       await loadForwards();
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : String(error));
+      setErrorMessage(errorMessageFromUnknown(error));
     } finally {
       setBusy(false);
     }

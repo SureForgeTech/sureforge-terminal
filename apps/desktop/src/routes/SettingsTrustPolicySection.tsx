@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { parseVaultSyncTrustPolicy, type VaultSyncTrustedKey } from "../lib/vault-sync-contract";
 import { cn, splitCommaList } from "../lib/utils";
 import { useVaultSyncTrustStore } from "../store/vault-sync-trust-store";
+import { errorMessageFromUnknown } from "../lib/error-message";
 
 interface TrustedKeyDraft {
   originalKeyId: string | null;
@@ -70,7 +71,7 @@ export function SettingsTrustPolicySection({
       );
     } catch (error) {
       setStatusMessage(undefined);
-      setErrorMessage(error instanceof Error ? error.message : String(error));
+      setErrorMessage(errorMessageFromUnknown(error));
     } finally {
       if (trustPolicyFileInputRef.current) {
         trustPolicyFileInputRef.current.value = "";

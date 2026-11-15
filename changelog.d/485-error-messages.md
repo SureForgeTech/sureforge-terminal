@@ -1,0 +1,1 @@
+- [FIX] Show the real reason for a failed action instead of "[object Object]", a generic line, or raw JSON (#485)

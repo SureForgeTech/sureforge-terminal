@@ -9,6 +9,7 @@ import { pushUndoToast } from "../lib/undo-toast";
 import { useAppStore } from "../store/app-store";
 import { useHostsStore } from "../store/hosts-store";
 import { useIdentitiesStore } from "../store/identities-store";
+import { errorMessageFromUnknown } from "../lib/error-message";
 
 export function SettingsPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -106,7 +107,7 @@ export function SettingsPage() {
     } catch (error) {
       setPendingImport(null);
       setStatusMessage(undefined);
-      setErrorMessage(error instanceof Error ? error.message : String(error));
+      setErrorMessage(errorMessageFromUnknown(error));
     } finally {
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
@@ -134,7 +135,7 @@ export function SettingsPage() {
       );
     } catch (error) {
       setStatusMessage(undefined);
-      setErrorMessage(error instanceof Error ? error.message : String(error));
+      setErrorMessage(errorMessageFromUnknown(error));
     }
   };
 

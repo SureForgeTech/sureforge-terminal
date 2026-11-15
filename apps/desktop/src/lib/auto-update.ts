@@ -9,6 +9,7 @@
 //   if (update?.available) { /* show "Install + restart" banner */ }
 
 import { invokeTauriCommand, isTauriRuntime } from "./backend-runtime";
+import { errorMessageFromUnknown } from "./error-message";
 
 export interface UpdateCheckResult {
   available: boolean;
@@ -46,21 +47,9 @@ export async function checkForUpdates(): Promise<UpdateCheckResult | null> {
  */
 export const LIVE_SESSIONS_MARKER = "live-sessions:";
 
-/**
- * #485: commands migrated to the typed `IpcError` reject with a plain
- * `{ code, message }` object (see ssh-error-classifier.ts), not an Error and
- * not a string. Unwrap it so the marker scan and failure text see the real
- * message instead of "[object Object]".
- */
-export function errorMessageFromUnknown(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  if (typeof error === "object" && error !== null && "message" in error) {
-    return String((error as { message: unknown }).message ?? "");
-  }
-  return String(error ?? "");
-}
+// #485: kept as an export here for existing callers; the shared helper lives
+// in error-message.ts.
+export { errorMessageFromUnknown };
 
 export function parseLiveSessionRefusal(error: unknown): number | null {
   const message = errorMessageFromUnknown(error);

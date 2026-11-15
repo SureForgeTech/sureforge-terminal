@@ -139,4 +139,18 @@ describe("backend failure messages", () => {
       })
     ).toBe("Public-key installation on build.example failed without an exit code.");
   });
+
+  it("shows the message of a typed { code, message } IPC rejection (#485)", () => {
+    expect(formatBackendFailure({ code: "timeout", message: "Connection timed out" })).toBe(
+      "Connection timed out"
+    );
+  });
+
+  it("keeps the generic line for values with no usable message", () => {
+    expect(formatBackendFailure({ code: "internal" })).toBe("The backend request failed.");
+    expect(formatBackendFailure({ code: "internal", message: "" })).toBe(
+      "The backend request failed."
+    );
+    expect(formatBackendFailure(undefined)).toBe("The backend request failed.");
+  });
 });

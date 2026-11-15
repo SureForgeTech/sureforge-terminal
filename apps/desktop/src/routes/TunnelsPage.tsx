@@ -13,6 +13,7 @@ import { deleteLocalForward, listLocalForwards } from "../lib/api";
 import { useHostsStore } from "../store/hosts-store";
 import { useSessionsStore } from "../store/sessions-store";
 import type { PortForwardRecord } from "../types/forward";
+import { errorMessageFromUnknown } from "../lib/error-message";
 
 interface ForwardRow {
   forward: PortForwardRecord;
@@ -94,7 +95,7 @@ export function TunnelsPage() {
       await deleteLocalForward(forwardId);
       await refresh();
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : String(error));
+      setErrorMessage(errorMessageFromUnknown(error));
     }
   };
 

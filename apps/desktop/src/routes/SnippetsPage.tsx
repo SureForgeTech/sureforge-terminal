@@ -16,6 +16,7 @@ import { useRunbooksStore } from "../store/runbooks-store";
 import { useSessionsStore } from "../store/sessions-store";
 import { useSnippetsStore } from "../store/snippets-store";
 import { emptySnippetFormValues, type SnippetRecord } from "../types/snippet";
+import { errorMessageFromUnknown } from "../lib/error-message";
 
 export function SnippetsPage() {
   const navigate = useNavigate();
@@ -166,7 +167,7 @@ export function SnippetsPage() {
       setBroadcastResults(result.results);
       markSnippetRun(selectedSnippet.id);
     } catch (error) {
-      setBroadcastError(error instanceof Error ? error.message : String(error));
+      setBroadcastError(errorMessageFromUnknown(error));
     } finally {
       setBroadcastBusy(false);
     }

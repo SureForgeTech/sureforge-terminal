@@ -23,6 +23,7 @@ import type { SessionConnectionState } from "../types/session";
 import type { PortForwardRecord } from "../types/forward";
 import type { HostProtocol } from "../types/host";
 import type { KeyMetadata } from "../types/key";
+import { backendErrorMessageFromBody, errorMessageFromUnknown } from "./error-message";
 
 interface TauriInternals {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
@@ -259,16 +260,7 @@ export function buildBrowserSessionSocketUrl(
   return `${protocol}//${locationLike.host}/ws/sessions/${sessionId}`;
 }
 
-function getErrorMessage(error: unknown) {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  // #203: migrated commands reject with a typed { code, message } object.
-  if (typeof error === "object" && error !== null && "message" in error) {
-    return String((error as { message: unknown }).message ?? "");
-  }
-  return String(error);
-}
+const getErrorMessage = errorMessageFromUnknown;
 
 async function openBrowserSessionSocket(sessionId: string) {
   if (typeof window === "undefined") {
@@ -485,19 +477,7 @@ async function browserFetchJson<T>(path: string, init?: RequestInit) {
   });
 
   if (!response.ok) {
-    const errorBody = await response.text();
-    let message = errorBody;
-    if (errorBody) {
-      try {
-        const parsed = JSON.parse(errorBody);
-        if (parsed && typeof parsed === "object" && typeof parsed.error === "string") {
-          message = parsed.error;
-        }
-      } catch {
-        // Not valid JSON, keep raw text
-      }
-    }
-    throw new Error(message || `Backend request failed: ${response.status}`);
+    throw new Error(backendErrorMessageFromBody(await response.text(), response.status));
   }
 
   return (await response.json()) as T;

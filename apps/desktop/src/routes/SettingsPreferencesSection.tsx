@@ -6,6 +6,7 @@ import { formatPrimaryShortcut } from "../lib/shortcuts";
 import { cn } from "../lib/utils";
 import { useAppStore } from "../store/app-store";
 import { listTerminalThemeOptions, type TerminalThemeName } from "../lib/terminal-themes";
+import { errorMessageFromUnknown } from "../lib/error-message";
 
 export function SettingsPreferencesSection() {
   const nativeRuntime = isTauriRuntime();
@@ -361,7 +362,7 @@ export function SettingsPreferencesSection() {
                     );
                   } catch (error) {
                     setUpdateCheckStatus(
-                      error instanceof Error ? error.message : String(error)
+                      errorMessageFromUnknown(error)
                     );
                   }
                 }}

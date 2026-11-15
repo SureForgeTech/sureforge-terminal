@@ -46,6 +46,7 @@ import {
   scanDemoKnownHost,
   uploadDemoRemoteFile,
 } from "./demo-backend";
+import { backendErrorMessageFromBody } from "./error-message";
 
 export type {
   BackendHostConnection,
@@ -77,8 +78,7 @@ async function backendFetch<T>(path: string, init?: RequestInit) {
   });
 
   if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(errorBody || `Backend request failed: ${response.status}`);
+    throw new Error(backendErrorMessageFromBody(await response.text(), response.status));
   }
 
   return (await response.json()) as T;
@@ -92,8 +92,7 @@ async function backendBinaryFetch(path: string, init?: RequestInit) {
   const response = await fetch(path, init);
 
   if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(errorBody || `Backend request failed: ${response.status}`);
+    throw new Error(backendErrorMessageFromBody(await response.text(), response.status));
   }
 
   return response;

@@ -34,6 +34,7 @@ import { SessionRestoreManager } from "../terminal/SessionRestoreManager";
 import { CommandPaletteDialog } from "./CommandPaletteDialog";
 import { Sidebar } from "./Sidebar";
 import { useCommandPaletteRows } from "./use-command-palette-rows";
+import { errorMessageFromUnknown } from "../../lib/error-message";
 
 export const APP_TITLE = "Terminal Workspace";
 
@@ -359,7 +360,7 @@ export function AppShell() {
         // its arguments back inside the error payload — logging the object whole
         // would reintroduce the leak by the back door. Tauri's ACL denial text
         // names the missing permission, which is the part worth having.
-        const reason = error instanceof Error ? error.message : String(error);
+        const reason = errorMessageFromUnknown(error);
         console.error(
           `[termsnip] window setTitle failed — if this names a permission, add it to capabilities/default.json: ${reason}`,
         );

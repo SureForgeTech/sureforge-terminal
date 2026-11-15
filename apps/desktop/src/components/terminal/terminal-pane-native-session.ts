@@ -15,6 +15,7 @@ import { type HostRecord } from "../../types/host";
 import { type SessionConnectionState, type SessionPane, type SessionTransport } from "../../types/session";
 import { shouldScheduleReconnect } from "./connect-failure-policy";
 import { type RuntimeStatusMessage } from "./use-terminal-pane-runtime-status";
+import { errorMessageFromUnknown } from "../../lib/error-message";
 
 /** #513: automatic reconnect attempts before the pane gives up. */
 export const MAX_RECONNECT_ATTEMPTS = 5;
@@ -475,7 +476,7 @@ export function createTerminalPaneNativeSessionController(options: TerminalPaneN
       // progress, which left a failed retry stuck on "connecting".
       connectingRef.current = false;
       const classified = classifySshError(error);
-      const raw = classified.raw || (error instanceof Error ? error.message : String(error));
+      const raw = classified.raw || (errorMessageFromUnknown(error));
       const friendly = classified.hint
         ? `${classified.message} ${classified.hint}`
         : classified.message;

@@ -7,6 +7,7 @@ import type {
   SshConfigCommandOperation,
   SshFailureStage,
 } from "./backend-contract";
+import { errorMessageFromUnknown } from "./error-message";
 
 function pathFailure(
   error: Record<string, unknown>
@@ -82,6 +83,16 @@ export function formatBackendFailure(error: unknown) {
   }
   if (typeof error === "string") {
     return error;
+  }
+  // A typed { code, message } rejection from the native shell (#485) carries
+  // the real reason; showing the generic line instead hid it.
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    typeof (error as { message?: unknown }).message === "string" &&
+    (error as { message: string }).message !== ""
+  ) {
+    return errorMessageFromUnknown(error);
   }
   return "The backend request failed.";
 }

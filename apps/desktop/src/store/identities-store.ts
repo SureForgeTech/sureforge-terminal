@@ -21,6 +21,7 @@ import { clearIdentityPassphraseById } from "./connection-secrets-store";
 import { useHostsStore } from "./hosts-store";
 import { useKeysStore } from "./keys-store";
 import { useVaultSyncStore } from "./vault-sync-store";
+import { errorMessageFromUnknown } from "../lib/error-message";
 
 // UX-13: undoable delete — see keys-store for the full contract. The
 // Keychain passphrase GC defers to window expiry; the vault tombstone is
@@ -80,7 +81,7 @@ interface PersistedIdentitiesState {
 }
 
 function logIdentityError(action: string, error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessageFromUnknown(error);
   console.warn(`identities-store ${action} failed: ${message}`);
 }
 
