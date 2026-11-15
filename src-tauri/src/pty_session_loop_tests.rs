@@ -425,7 +425,7 @@ fn external_loop_reports_a_failed_exit_with_the_spec_exit_label() {
     let errors = run.sink.errors();
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert!(
-        errors[0].starts_with("Test command exited with status"),
+        errors[0].starts_with("Test command exited with code"),
         "{errors:?}"
     );
     assert_eq!(
@@ -580,7 +580,7 @@ fn jump_loop_reports_a_failed_ssh_and_removes_its_dir_after_the_close_event() {
     assert!(
         errors
             .iter()
-            .any(|error| error.starts_with("SSH session exited with status")),
+            .any(|error| error.starts_with("SSH session exited with code")),
         "{errors:?}"
     );
     assert_eq!(
@@ -661,7 +661,7 @@ fn external_loop_always_reports_a_failed_exit() {
         let errors = run.sink.errors();
         assert_eq!(errors.len(), 1, "attempt {attempt}: {errors:?}");
         assert!(
-            errors[0].starts_with("Test command exited with status"),
+            errors[0].starts_with("Test command exited with code"),
             "attempt {attempt}: {errors:?}"
         );
         assert_torn_down(&run);
@@ -685,4 +685,33 @@ fn external_loop_never_reports_a_clean_exit_as_an_error() {
         );
         assert!(run.sink.output().contains('x'), "attempt {attempt}");
     }
+}
+
+#[test]
+fn exit_failure_message_names_the_code_or_the_signal() {
+    assert_eq!(
+        pty_exit_failure_message("Local shell", &ExitStatus::with_exit_code(3)),
+        "Local shell exited with code 3."
+    );
+    assert_eq!(
+        pty_exit_failure_message("SSH session", &ExitStatus::with_signal("Killed")),
+        "SSH session was terminated by Killed."
+    );
+}
+
+#[test]
+fn input_failure_after_the_session_started_ending_is_not_reported() {
+    let error = "write failed".to_string();
+    assert_eq!(
+        ignore_once_ending(error.clone(), None, None),
+        Err(error.clone())
+    );
+    assert_eq!(
+        ignore_once_ending(error.clone(), Some(Instant::now()), None),
+        Ok(())
+    );
+    assert_eq!(
+        ignore_once_ending(error, None, Some(Instant::now())),
+        Ok(())
+    );
 }
