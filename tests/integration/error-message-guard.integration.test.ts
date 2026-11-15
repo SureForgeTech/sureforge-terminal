@@ -11,8 +11,8 @@ import { describe, expect, it } from "vitest";
 describe("no hand-rolled error-to-text conversions", () => {
   const sourceRoot = join(fileURLToPath(new URL(".", import.meta.url)), "../../apps/desktop/src");
   // Either an `instanceof Error` check with a hand-written fallback, or a cast
-// that reads "undefined" when the value is a string or a typed rejection.
-const pattern = /instanceof Error\s*\?\s*[\w.]+\.message\s*:|\(\s*\w+\s+as\s+Error\s*\)\.message/;
+  // that reads "undefined" when the value is a string or a typed rejection.
+  const pattern = /instanceof Error\s*\?\s*[\w.]+\.message\s*:|\(\s*\w+\s+as\s+Error\s*\)\??\.message/;
 
   function sourceFiles(dir: string): string[] {
     return readdirSync(dir).flatMap((name: string) => {

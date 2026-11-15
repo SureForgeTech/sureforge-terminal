@@ -245,7 +245,7 @@ async function expandText(
         } catch (error) {
           skipped.push({
             reason: "include-directive",
-            detail: `Include ${entry} (glob error: ${errorMessageFromUnknown(error)})`,
+            detail: `Include ${entry} (glob error: ${errorMessageFromUnknown(error, "unknown error")})`,
           });
           continue;
         }
@@ -296,7 +296,7 @@ async function expandText(
       } catch (error) {
         skipped.push({
           reason: "include-directive",
-          detail: `Include ${entry} (read error: ${errorMessageFromUnknown(error)})`,
+          detail: `Include ${entry} (read error: ${errorMessageFromUnknown(error, "unknown error")})`,
         });
         continue;
       }
