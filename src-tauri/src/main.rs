@@ -2339,8 +2339,8 @@ fn run_pty_session<E: SessionEventSink>(
     Ok(())
 }
 
-/// Shared teardown, in the order both paths have always used: report a
-/// failure, close the session's forwards, drop it from the registry, report
+/// Shared teardown: report a failure, drop the session from the registry,
+/// close its forwards (in that order; see the comment below), report
 /// disconnected, remove `cleanup_before_close` if any, then send close.
 fn finish_pty_session<E: SessionEventSink>(
     app: &E,
@@ -4513,6 +4513,9 @@ async fn terminal_workspace_create_backend_session(
 
         if let Err(error) = connect_result {
             remove_native_session(native_sessions.inner(), &session_id);
+            // A forward started while this connect was in progress registered
+            // against the session; close it like any other teardown does.
+            close_native_forwards_for_session(native_forwards.inner(), &session_id);
             return Err(error);
         }
         // Direct SSH is connected once connect_native_session returns; the
