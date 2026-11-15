@@ -1,4 +1,3 @@
-import net from "node:net";
 // #185: drives the REAL backend.mjs over its actual HTTP and WebSocket surface.
 //
 // Started by scripts/backend-transport-test.sh, which owns the sshd fixture and
@@ -8,6 +7,7 @@ import net from "node:net";
 // automated path where a broken SSH handshake, auth gate, or session lifecycle
 // actually fails a build.
 
+import net from "node:net";
 import { createRequire } from "node:module";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -381,11 +381,19 @@ async function main() {
         (await readFrom(first)) === "from-local-a");
       check("the second remote forward carries its own traffic",
         (await readFrom(second)) === "from-local-b");
+      const removed = [];
       for (const response of made) {
         if (response.json?.id) {
-          await api(`/api/backend/forwards/${response.json.id}`, { method: "DELETE", token: TOKEN });
+          removed.push(
+            await api(`/api/backend/forwards/${response.json.id}`, { method: "DELETE", token: TOKEN })
+          );
         }
       }
+      check("both remote forwards were stopped", removed.length === 2 &&
+        removed.every((response) => response.status === 200),
+        removed.map((response) => response.status).join(","));
+      check("a stopped remote forward no longer carries traffic",
+        (await readFrom(first)) === "");
     } finally {
       for (const server of servers) {
         server.close();

@@ -421,19 +421,21 @@ async function createRemoteForward({ localHost, localPort, remoteHost, remotePor
 
   ensureRemoteForwardDispatcher(session);
 
-  const assignedPort = await new Promise((resolve, reject) => {
+  await new Promise((resolve, reject) => {
     session.client.forwardIn(remoteHost, remotePort, (error, boundPort) => {
       if (error) {
         reject(error);
         return;
       }
 
-      resolve(boundPort ?? remotePort);
+      // Registered here, not after the await: a connection the server sends
+      // right behind its bind reply must already find this forward.
+      forward.remotePort = boundPort ?? remotePort;
+      forwards.set(forward.id, forward);
+      resolve();
     });
   });
 
-  forward.remotePort = assignedPort;
-  forwards.set(forward.id, forward);
   return serializeForward(forward);
 }
 
