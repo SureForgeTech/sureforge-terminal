@@ -1926,226 +1926,38 @@ fn run_external_command_session_loop_with_spec<E, F>(
     F: FnOnce(&BackendHostConnection, &str) -> Result<ExternalCommandSessionSpec, String>,
 {
     let mut cleanup_dir = None;
-    let result = (|| -> Result<(), String> {
+    let result = build_spec(&host, &session_id).and_then(|spec| {
         let ExternalCommandSessionSpec {
             command,
             exit_label,
             prompt_responses,
             cleanup_dir: spec_cleanup_dir,
-        } = build_spec(&host, &session_id)?;
-        cleanup_dir = spec_cleanup_dir.clone();
-        let pty_system = native_pty_system();
-        let pair = pty_system
-            .openpty(PtySize {
-                rows: DEFAULT_TERMINAL_ROWS,
-                cols: DEFAULT_TERMINAL_COLS,
-                pixel_width: DEFAULT_TERMINAL_PIXEL_WIDTH,
-                pixel_height: DEFAULT_TERMINAL_PIXEL_HEIGHT,
-            })
-            .map_err(|error| error.to_string())?;
-
-        let mut child = pair
-            .slave
-            .spawn_command(command)
-            .map_err(|error| error.to_string())?;
-        drop(pair.slave);
-
-        let writer = Arc::new(Mutex::new(
-            pair.master
-                .take_writer()
-                .map_err(|error| error.to_string())?,
-        ));
-        let reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|error| error.to_string())?;
-        let mut master = pair.master;
-        // #143 bounded the emit path with OutputCoalescer. #193 bounds this hop
-        // too: a reader that outpaces the loop's drain used to queue Output
-        // events without limit and could exhaust memory on its own. A full queue
-        // now blocks the reader's send, which stops it draining the PTY and
-        // pushes backpressure to the remote producer — output is delayed, never
-        // dropped.
-        let (output_sender, output_receiver) = native_session_event_channel();
-
-        if prompt_responses.is_empty() {
-            spawn_local_session_reader(reader, output_sender);
-        } else {
-            spawn_jump_session_reader(reader, writer.clone(), prompt_responses, output_sender);
-        }
-        set_native_session_connection_state(&app, &session_id, &state, "connected");
-
-        let mut coalescer = OutputCoalescer::new(
-            Duration::from_millis(NATIVE_OUTPUT_COALESCE_WINDOW_MS),
-            NATIVE_OUTPUT_COALESCE_MAX_BYTES,
-        );
-        let mut should_close = false;
-        let mut reported_error = false;
-
-        while !should_close {
-            let mut did_work = false;
-
-            loop {
-                match receiver.try_recv() {
-                    Ok(NativeSessionCommand::Close) => {
-                        should_close = true;
-                        break;
-                    }
-                    Ok(NativeSessionCommand::Input(input)) => {
-                        did_work = true;
-                        // Flush buffered output before propagating a write error
-                        // so the `?` early-return cannot drop pending bytes.
-                        if let Err(error) = write_jump_session_input(&writer, &input) {
-                            if let Some(flushed) = coalescer.finish() {
-                                emit_native_session_output(&app, &session_id, &state, flushed);
-                            }
-                            return Err(error);
-                        }
-                    }
-                    Ok(NativeSessionCommand::Resize { cols, rows }) => {
-                        did_work = true;
-                        if let Err(error) = resize_jump_session_pty(&mut master, cols, rows) {
-                            if let Some(flushed) = coalescer.finish() {
-                                emit_native_session_output(&app, &session_id, &state, flushed);
-                            }
-                            return Err(error);
-                        }
-                    }
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => {
-                        should_close = true;
-                        break;
-                    }
-                }
-            }
-
-            loop {
-                match output_receiver.try_recv() {
-                    Ok(JumpSessionEvent::Output(output)) => {
-                        did_work = true;
-                        if let Some(flushed) = coalescer.push(&output, Instant::now()) {
-                            emit_native_session_output(&app, &session_id, &state, flushed);
-                        }
-                    }
-                    Ok(JumpSessionEvent::Error(error)) => {
-                        // Emit any output received before the error first, so the
-                        // terminal shows it in order ahead of the error notice.
-                        if let Some(flushed) = coalescer.finish() {
-                            emit_native_session_output(&app, &session_id, &state, flushed);
-                        }
-                        emit_native_session_error(&app, &session_id, &state, error);
-                        set_native_session_connection_state(&app, &session_id, &state, "error");
-                        reported_error = true;
-                        should_close = true;
-                        break;
-                    }
-                    Ok(JumpSessionEvent::Eof) => {
-                        should_close = true;
-                        break;
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        should_close = true;
-                        break;
-                    }
-                }
-            }
-
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    if !status.success() && !reported_error {
-                        emit_native_session_error(
-                            &app,
-                            &session_id,
-                            &state,
-                            format!("{exit_label} exited with status {status}."),
-                        );
-                        set_native_session_connection_state(&app, &session_id, &state, "error");
-                    }
-                    should_close = true;
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    emit_native_session_error(&app, &session_id, &state, error.to_string());
-                    set_native_session_connection_state(&app, &session_id, &state, "error");
-                    should_close = true;
-                }
-            }
-
-            if let Some(flushed) = coalescer.poll_flush(Instant::now()) {
-                emit_native_session_output(&app, &session_id, &state, flushed);
-            }
-
-            if !did_work && !should_close {
-                match receiver.recv_timeout(native_session_idle_wait(&coalescer)) {
-                    Ok(NativeSessionCommand::Close) => {
-                        should_close = true;
-                    }
-                    Ok(NativeSessionCommand::Input(input)) => {
-                        if let Err(error) = write_jump_session_input(&writer, &input) {
-                            if let Some(flushed) = coalescer.finish() {
-                                emit_native_session_output(&app, &session_id, &state, flushed);
-                            }
-                            return Err(error);
-                        }
-                    }
-                    Ok(NativeSessionCommand::Resize { cols, rows }) => {
-                        if let Err(error) = resize_jump_session_pty(&mut master, cols, rows) {
-                            if let Some(flushed) = coalescer.finish() {
-                                emit_native_session_output(&app, &session_id, &state, flushed);
-                            }
-                            return Err(error);
-                        }
-                    }
-                    Err(RecvTimeoutError::Timeout) => {}
-                    Err(RecvTimeoutError::Disconnected) => {
-                        should_close = true;
-                    }
-                }
-            }
-        }
-
-        if let Some(flushed) = coalescer.finish() {
-            emit_native_session_output(&app, &session_id, &state, flushed);
-        }
-
-        let _ = child.kill();
-        let _ = child.wait();
-        drop(master);
-
-        Ok(())
-    })();
-
-    if let Err(error) = result {
-        emit_native_session_error(&app, &session_id, &state, error);
-        set_native_session_connection_state(&app, &session_id, &state, "error");
-    }
-
-    close_native_forwards_for_session(&forward_registry, &session_id);
-    remove_native_session(&registry, &session_id);
-    set_native_session_connection_state(&app, &session_id, &state, "disconnected");
-
-    if let Some(cleanup_dir) = cleanup_dir {
-        let _ = fs::remove_dir_all(cleanup_dir);
-    }
-
-    let stream_id = {
-        let mut state = state.lock_recover();
-        state.stream_id.take()
-    };
-
-    if let Some(stream_id) = stream_id {
-        emit_session_stream_event(
+        } = spec;
+        cleanup_dir = spec_cleanup_dir;
+        run_pty_session(
             &app,
-            SessionStreamEvent {
-                data: None,
-                kind: "close",
-                message: None,
-                session_id: session_id.clone(),
-                stream_id,
+            &session_id,
+            &state,
+            &receiver,
+            PtySessionLaunch {
+                command,
+                exit_label,
+                prompt_responses,
+                always_answer_prompts: false,
             },
-        );
-    }
+        )
+    });
+
+    // The external path removes its cleanup dir BEFORE the close event.
+    finish_pty_session(
+        &app,
+        &registry,
+        &forward_registry,
+        &session_id,
+        &state,
+        result,
+        cleanup_dir,
+    );
 }
 
 fn run_jump_host_session_loop<E: SessionEventSink>(
@@ -2157,6 +1969,9 @@ fn run_jump_host_session_loop<E: SessionEventSink>(
     host: BackendHostConnection,
     receiver: Receiver<NativeSessionCommand>,
 ) {
+    // A failure here returns before registry cleanup and the close event, as
+    // it always has; the session dir does not exist yet, so there is nothing
+    // to remove.
     let session_dir = match create_native_ssh_session_dir(&session_id) {
         Ok(path) => path,
         Err(error) => {
@@ -2171,15 +1986,6 @@ fn run_jump_host_session_loop<E: SessionEventSink>(
         let known_hosts_path = write_native_known_hosts(&host, &session_dir)?;
         let (config_path, target_alias) =
             build_native_ssh_config(&host, &session_dir, &known_hosts_path, None)?;
-        let pty_system = native_pty_system();
-        let pair = pty_system
-            .openpty(PtySize {
-                rows: DEFAULT_TERMINAL_ROWS,
-                cols: DEFAULT_TERMINAL_COLS,
-                pixel_width: DEFAULT_TERMINAL_PIXEL_WIDTH,
-                pixel_height: DEFAULT_TERMINAL_PIXEL_HEIGHT,
-            })
-            .map_err(|error| error.to_string())?;
 
         let mut command = CommandBuilder::new("/usr/bin/ssh");
         command.arg("-F");
@@ -2190,187 +1996,269 @@ fn run_jump_host_session_loop<E: SessionEventSink>(
             command.arg(remote_command);
         }
 
-        let mut child = pair
-            .slave
-            .spawn_command(command)
-            .map_err(|error| error.to_string())?;
-        drop(pair.slave);
-
-        let writer = Arc::new(Mutex::new(
-            pair.master
-                .take_writer()
-                .map_err(|error| error.to_string())?,
-        ));
-        let reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|error| error.to_string())?;
-        let mut master = pair.master;
-        // #143 bounded the emit path with OutputCoalescer. #193 bounds this hop
-        // too: a reader that outpaces the loop's drain used to queue Output
-        // events without limit and could exhaust memory on its own. A full queue
-        // now blocks the reader's send, which stops it draining the PTY and
-        // pushes backpressure to the remote producer — output is delayed, never
-        // dropped.
-        let (output_sender, output_receiver) = native_session_event_channel();
-
-        spawn_jump_session_reader(
-            reader,
-            writer.clone(),
-            build_prompt_responses(&host),
-            output_sender,
-        );
-        set_native_session_connection_state(&app, &session_id, &state, "connected");
-
-        let mut coalescer = OutputCoalescer::new(
-            Duration::from_millis(NATIVE_OUTPUT_COALESCE_WINDOW_MS),
-            NATIVE_OUTPUT_COALESCE_MAX_BYTES,
-        );
-        let mut should_close = false;
-        let mut reported_error = false;
-
-        while !should_close {
-            let mut did_work = false;
-
-            loop {
-                match receiver.try_recv() {
-                    Ok(NativeSessionCommand::Close) => {
-                        should_close = true;
-                        break;
-                    }
-                    Ok(NativeSessionCommand::Input(input)) => {
-                        did_work = true;
-                        // Flush buffered output before propagating a write error
-                        // so the `?` early-return cannot drop pending bytes.
-                        if let Err(error) = write_jump_session_input(&writer, &input) {
-                            if let Some(flushed) = coalescer.finish() {
-                                emit_native_session_output(&app, &session_id, &state, flushed);
-                            }
-                            return Err(error);
-                        }
-                    }
-                    Ok(NativeSessionCommand::Resize { cols, rows }) => {
-                        did_work = true;
-                        if let Err(error) = resize_jump_session_pty(&mut master, cols, rows) {
-                            if let Some(flushed) = coalescer.finish() {
-                                emit_native_session_output(&app, &session_id, &state, flushed);
-                            }
-                            return Err(error);
-                        }
-                    }
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => {
-                        should_close = true;
-                        break;
-                    }
-                }
-            }
-
-            loop {
-                match output_receiver.try_recv() {
-                    Ok(JumpSessionEvent::Output(output)) => {
-                        did_work = true;
-                        if let Some(flushed) = coalescer.push(&output, Instant::now()) {
-                            emit_native_session_output(&app, &session_id, &state, flushed);
-                        }
-                    }
-                    Ok(JumpSessionEvent::Error(error)) => {
-                        // Emit any output received before the error first, so the
-                        // terminal shows it in order ahead of the error notice.
-                        if let Some(flushed) = coalescer.finish() {
-                            emit_native_session_output(&app, &session_id, &state, flushed);
-                        }
-                        emit_native_session_error(&app, &session_id, &state, error);
-                        set_native_session_connection_state(&app, &session_id, &state, "error");
-                        reported_error = true;
-                        should_close = true;
-                        break;
-                    }
-                    Ok(JumpSessionEvent::Eof) => {
-                        should_close = true;
-                        break;
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        should_close = true;
-                        break;
-                    }
-                }
-            }
-
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    if !status.success() && !reported_error {
-                        emit_native_session_error(
-                            &app,
-                            &session_id,
-                            &state,
-                            format!("SSH session exited with status {status}."),
-                        );
-                        set_native_session_connection_state(&app, &session_id, &state, "error");
-                    }
-                    should_close = true;
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    emit_native_session_error(&app, &session_id, &state, error.to_string());
-                    set_native_session_connection_state(&app, &session_id, &state, "error");
-                    should_close = true;
-                }
-            }
-
-            if let Some(flushed) = coalescer.poll_flush(Instant::now()) {
-                emit_native_session_output(&app, &session_id, &state, flushed);
-            }
-
-            if !did_work && !should_close {
-                match receiver.recv_timeout(native_session_idle_wait(&coalescer)) {
-                    Ok(NativeSessionCommand::Close) => {
-                        should_close = true;
-                    }
-                    Ok(NativeSessionCommand::Input(input)) => {
-                        if let Err(error) = write_jump_session_input(&writer, &input) {
-                            if let Some(flushed) = coalescer.finish() {
-                                emit_native_session_output(&app, &session_id, &state, flushed);
-                            }
-                            return Err(error);
-                        }
-                    }
-                    Ok(NativeSessionCommand::Resize { cols, rows }) => {
-                        if let Err(error) = resize_jump_session_pty(&mut master, cols, rows) {
-                            if let Some(flushed) = coalescer.finish() {
-                                emit_native_session_output(&app, &session_id, &state, flushed);
-                            }
-                            return Err(error);
-                        }
-                    }
-                    Err(RecvTimeoutError::Timeout) => {}
-                    Err(RecvTimeoutError::Disconnected) => {
-                        should_close = true;
-                    }
-                }
-            }
-        }
-
-        if let Some(flushed) = coalescer.finish() {
-            emit_native_session_output(&app, &session_id, &state, flushed);
-        }
-
-        let _ = child.kill();
-        let _ = child.wait();
-        drop(master);
-
-        Ok(())
+        run_pty_session(
+            &app,
+            &session_id,
+            &state,
+            &receiver,
+            PtySessionLaunch {
+                command,
+                exit_label: "SSH session".to_string(),
+                prompt_responses: build_prompt_responses(&host),
+                always_answer_prompts: true,
+            },
+        )
     })();
 
-    if let Err(error) = result {
-        emit_native_session_error(&app, &session_id, &state, error);
-        set_native_session_connection_state(&app, &session_id, &state, "error");
+    finish_pty_session(
+        &app,
+        &registry,
+        &forward_registry,
+        &session_id,
+        &state,
+        result,
+        None,
+    );
+
+    // The jump path removes its session dir AFTER the close event.
+    let _ = fs::remove_dir_all(session_dir);
+}
+
+/// #483: what differs between the external-command and jump-host sessions
+/// once their command is built. Everything else, the PTY, the command and
+/// output loop and the coalescer, is shared in `run_pty_session`.
+struct PtySessionLaunch {
+    command: CommandBuilder,
+    /// Names the process in the "exited with status" error.
+    exit_label: String,
+    prompt_responses: Vec<PromptResponse>,
+    /// The jump path always uses the prompt-answering reader, even with no
+    /// responses; the external path uses it only when it has responses.
+    always_answer_prompts: bool,
+}
+
+/// Runs one PTY session until the process exits, the reader ends or the UI
+/// closes it. `Err` is a failure the caller reports through
+/// `finish_pty_session`; errors seen while running are emitted here.
+fn run_pty_session<E: SessionEventSink>(
+    app: &E,
+    session_id: &str,
+    state: &Arc<Mutex<NativeSessionState>>,
+    receiver: &Receiver<NativeSessionCommand>,
+    launch: PtySessionLaunch,
+) -> Result<(), String> {
+    let PtySessionLaunch {
+        command,
+        exit_label,
+        prompt_responses,
+        always_answer_prompts,
+    } = launch;
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: DEFAULT_TERMINAL_ROWS,
+            cols: DEFAULT_TERMINAL_COLS,
+            pixel_width: DEFAULT_TERMINAL_PIXEL_WIDTH,
+            pixel_height: DEFAULT_TERMINAL_PIXEL_HEIGHT,
+        })
+        .map_err(|error| error.to_string())?;
+
+    let mut child = pair
+        .slave
+        .spawn_command(command)
+        .map_err(|error| error.to_string())?;
+    drop(pair.slave);
+
+    let writer = Arc::new(Mutex::new(
+        pair.master
+            .take_writer()
+            .map_err(|error| error.to_string())?,
+    ));
+    let reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|error| error.to_string())?;
+    let mut master = pair.master;
+    // #143 bounded the emit path with OutputCoalescer. #193 bounds this hop
+    // too: a reader that outpaces the loop's drain used to queue Output
+    // events without limit and could exhaust memory on its own. A full queue
+    // now blocks the reader's send, which stops it draining the PTY and
+    // pushes backpressure to the remote producer — output is delayed, never
+    // dropped.
+    let (output_sender, output_receiver) = native_session_event_channel();
+
+    if always_answer_prompts || !prompt_responses.is_empty() {
+        spawn_jump_session_reader(reader, writer.clone(), prompt_responses, output_sender);
+    } else {
+        spawn_local_session_reader(reader, output_sender);
+    }
+    set_native_session_connection_state(app, session_id, state, "connected");
+
+    let mut coalescer = OutputCoalescer::new(
+        Duration::from_millis(NATIVE_OUTPUT_COALESCE_WINDOW_MS),
+        NATIVE_OUTPUT_COALESCE_MAX_BYTES,
+    );
+    let mut should_close = false;
+    let mut reported_error = false;
+
+    while !should_close {
+        let mut did_work = false;
+
+        loop {
+            match receiver.try_recv() {
+                Ok(NativeSessionCommand::Close) => {
+                    should_close = true;
+                    break;
+                }
+                Ok(NativeSessionCommand::Input(input)) => {
+                    did_work = true;
+                    // Flush buffered output before propagating a write error
+                    // so the `?` early-return cannot drop pending bytes.
+                    if let Err(error) = write_jump_session_input(&writer, &input) {
+                        if let Some(flushed) = coalescer.finish() {
+                            emit_native_session_output(app, session_id, state, flushed);
+                        }
+                        return Err(error);
+                    }
+                }
+                Ok(NativeSessionCommand::Resize { cols, rows }) => {
+                    did_work = true;
+                    if let Err(error) = resize_jump_session_pty(&mut master, cols, rows) {
+                        if let Some(flushed) = coalescer.finish() {
+                            emit_native_session_output(app, session_id, state, flushed);
+                        }
+                        return Err(error);
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    should_close = true;
+                    break;
+                }
+            }
+        }
+
+        loop {
+            match output_receiver.try_recv() {
+                Ok(JumpSessionEvent::Output(output)) => {
+                    did_work = true;
+                    if let Some(flushed) = coalescer.push(&output, Instant::now()) {
+                        emit_native_session_output(app, session_id, state, flushed);
+                    }
+                }
+                Ok(JumpSessionEvent::Error(error)) => {
+                    // Emit any output received before the error first, so the
+                    // terminal shows it in order ahead of the error notice.
+                    if let Some(flushed) = coalescer.finish() {
+                        emit_native_session_output(app, session_id, state, flushed);
+                    }
+                    emit_native_session_error(app, session_id, state, error);
+                    set_native_session_connection_state(app, session_id, state, "error");
+                    reported_error = true;
+                    should_close = true;
+                    break;
+                }
+                Ok(JumpSessionEvent::Eof) => {
+                    should_close = true;
+                    break;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    should_close = true;
+                    break;
+                }
+            }
+        }
+
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() && !reported_error {
+                    emit_native_session_error(
+                        app,
+                        session_id,
+                        state,
+                        format!("{exit_label} exited with status {status}."),
+                    );
+                    set_native_session_connection_state(app, session_id, state, "error");
+                }
+                should_close = true;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                emit_native_session_error(app, session_id, state, error.to_string());
+                set_native_session_connection_state(app, session_id, state, "error");
+                should_close = true;
+            }
+        }
+
+        if let Some(flushed) = coalescer.poll_flush(Instant::now()) {
+            emit_native_session_output(app, session_id, state, flushed);
+        }
+
+        if !did_work && !should_close {
+            match receiver.recv_timeout(native_session_idle_wait(&coalescer)) {
+                Ok(NativeSessionCommand::Close) => {
+                    should_close = true;
+                }
+                Ok(NativeSessionCommand::Input(input)) => {
+                    if let Err(error) = write_jump_session_input(&writer, &input) {
+                        if let Some(flushed) = coalescer.finish() {
+                            emit_native_session_output(app, session_id, state, flushed);
+                        }
+                        return Err(error);
+                    }
+                }
+                Ok(NativeSessionCommand::Resize { cols, rows }) => {
+                    if let Err(error) = resize_jump_session_pty(&mut master, cols, rows) {
+                        if let Some(flushed) = coalescer.finish() {
+                            emit_native_session_output(app, session_id, state, flushed);
+                        }
+                        return Err(error);
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    should_close = true;
+                }
+            }
+        }
     }
 
-    close_native_forwards_for_session(&forward_registry, &session_id);
-    remove_native_session(&registry, &session_id);
-    set_native_session_connection_state(&app, &session_id, &state, "disconnected");
+    if let Some(flushed) = coalescer.finish() {
+        emit_native_session_output(app, session_id, state, flushed);
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+    drop(master);
+
+    Ok(())
+}
+
+/// Shared teardown, in the order both paths have always used: report a
+/// failure, close the session's forwards, drop it from the registry, report
+/// disconnected, remove `cleanup_before_close` if any, then send close.
+fn finish_pty_session<E: SessionEventSink>(
+    app: &E,
+    registry: &NativeSessionRegistry,
+    forward_registry: &NativeForwardRegistry,
+    session_id: &str,
+    state: &Arc<Mutex<NativeSessionState>>,
+    result: Result<(), String>,
+    cleanup_before_close: Option<PathBuf>,
+) {
+    if let Err(error) = result {
+        emit_native_session_error(app, session_id, state, error);
+        set_native_session_connection_state(app, session_id, state, "error");
+    }
+
+    close_native_forwards_for_session(forward_registry, session_id);
+    remove_native_session(registry, session_id);
+    set_native_session_connection_state(app, session_id, state, "disconnected");
+
+    if let Some(cleanup_dir) = cleanup_before_close {
+        let _ = fs::remove_dir_all(cleanup_dir);
+    }
 
     let stream_id = {
         let mut state = state.lock_recover();
@@ -2379,18 +2267,16 @@ fn run_jump_host_session_loop<E: SessionEventSink>(
 
     if let Some(stream_id) = stream_id {
         emit_session_stream_event(
-            &app,
+            app,
             SessionStreamEvent {
                 data: None,
                 kind: "close",
                 message: None,
-                session_id: session_id.clone(),
+                session_id: session_id.to_string(),
                 stream_id,
             },
         );
     }
-
-    let _ = fs::remove_dir_all(session_dir);
 }
 
 /// Write all bytes, retrying on WouldBlock, bounded by an *idle* deadline: the
