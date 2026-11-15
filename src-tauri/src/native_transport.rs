@@ -1494,7 +1494,11 @@ pub(crate) fn drain_exited_process_output(
 /// upload (about 48 MiB at a pessimistic 256 KiB/s, the browser runtime's
 /// request cap; the native path has no such cap, so a larger upload over a
 /// slow link can still time out) and a 30-minute ceiling for a download,
-/// whose size is not known up front. With `-q` sftp prints nothing while a transfer runs,
+/// whose size is not known up front. The browser runtime also stops a
+/// download after 30 s with no data; the native path cannot see progress, so
+/// it has only the ceiling, and a server that stays connected but stops
+/// sending holds a download for up to 30 minutes (keep-alives still end a
+/// dead connection in about 45 s). With `-q` sftp prints nothing while a transfer runs,
 /// so there is no progress to measure; the fixed 15 s used to cut off any
 /// transfer that took longer and leave a partial remote file.
 pub(crate) fn sftp_command_timeout(command: &str) -> Duration {
@@ -1502,6 +1506,21 @@ pub(crate) fn sftp_command_timeout(command: &str) -> Duration {
         "put" => Duration::from_millis(222_000),
         "get" => Duration::from_millis(1_800_000),
         _ => Duration::from_millis(NATIVE_SSH_CONTROL_READY_TIMEOUT_MS),
+    }
+}
+
+/// What the user reads when an sftp step runs out of time: a transfer names
+/// itself and its limit, rather than the generic prompt wait.
+pub(crate) fn sftp_timeout_message(command: &str, timeout: Duration) -> String {
+    let limit = if timeout.as_secs() >= 120 {
+        format!("{} minutes", timeout.as_secs().div_ceil(60))
+    } else {
+        format!("{} seconds", timeout.as_secs())
+    };
+    match command.split_whitespace().next().unwrap_or("") {
+        "put" => format!("The upload did not finish within {limit}, so it was stopped."),
+        "get" => format!("The download did not finish within {limit}, so it was stopped."),
+        _ => "Timed out while waiting for the sftp prompt".to_string(),
     }
 }
 
@@ -1577,7 +1596,7 @@ pub(crate) fn wait_for_sftp_prompt(
         if started_at.elapsed() > timeout {
             let message = trim_ssh_output(&captured_output);
             return Err(if message.is_empty() {
-                "Timed out while waiting for the sftp prompt".to_string()
+                sftp_timeout_message(pending_command, timeout)
             } else {
                 message
             });
@@ -2304,6 +2323,22 @@ pub(crate) fn execute_native_snippet_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sftp_timeout_message_names_the_transfer_and_its_limit() {
+        assert_eq!(
+            sftp_timeout_message("put /l /r", Duration::from_secs(222)),
+            "The upload did not finish within 4 minutes, so it was stopped."
+        );
+        assert_eq!(
+            sftp_timeout_message("get /r /l", Duration::from_secs(1800)),
+            "The download did not finish within 30 minutes, so it was stopped."
+        );
+        assert_eq!(
+            sftp_timeout_message("ls -la /d", Duration::from_secs(15)),
+            "Timed out while waiting for the sftp prompt"
+        );
+    }
 
     #[test]
     fn sftp_transfers_get_longer_time_limits_than_other_commands() {
