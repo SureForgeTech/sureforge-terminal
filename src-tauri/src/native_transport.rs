@@ -1366,12 +1366,13 @@ pub(crate) fn run_sftp_batch_commands(
         .try_clone_reader()
         .map_err(|error| error.to_string())?;
     let master = pair.master;
-    // #193: deliberately UNBOUNDED, unlike the live session loops. This receiver
-    // is reused across prompt waits and stops draining while the next command is
-    // issued, so a bounded queue would stall the reader mid-capture. The capture
-    // accumulates into an unbounded String anyway, so bounding only the channel
-    // would not give this path a memory bound — that needs its own truncation
-    // policy, not a channel size.
+    // Bounded, like the live session loops (#205; this comment used to call
+    // the channel unbounded, which #193 made it and #205 reversed). The
+    // receiver is reused across prompt waits and is not drained while the next
+    // command is issued, so a full queue makes the reader wait, which holds
+    // back the sftp process's output until the next wait drains it; nothing is
+    // lost. The capture still accumulates into an unbounded String, so the
+    // channel size is not this path's memory bound.
     let (output_sender, output_receiver) =
         std::sync::mpsc::sync_channel(NATIVE_SESSION_EVENT_CHANNEL_CAPACITY);
     spawn_jump_session_reader(
@@ -1457,7 +1458,9 @@ pub(crate) fn extract_sftp_prompt_output(output: &str, pending_command: &str) ->
 
 /// How long a capture keeps reading after its process exited. The PTY normally
 /// drains in milliseconds; the bound covers a process that left a child
-/// holding it open.
+/// holding it open, and an sftp client that handed its terminal to a running
+/// SSH control master (ControlMaster auto), which may close it later. Only a
+/// failed operation pays this wait.
 const EXITED_PROCESS_DRAIN_LIMIT: Duration = Duration::from_millis(500);
 
 /// After the process has exited, collect the output the reader still has, so
