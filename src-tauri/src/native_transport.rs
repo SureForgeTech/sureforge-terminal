@@ -1488,11 +1488,29 @@ pub(crate) fn drain_exited_process_output(
     captured.push_str(&decoder.finish());
 }
 
+/// How long one sftp command may take before the batch gives up. Listing,
+/// mkdir, rename and delete keep the control timeout. A transfer gets the
+/// budgets the browser runtime uses (backend-deadline.mjs): 222 s for an
+/// upload (about 48 MiB at a pessimistic 256 KiB/s, the browser runtime's
+/// request cap; the native path has no such cap, so a larger upload over a
+/// slow link can still time out) and a 30-minute ceiling for a download,
+/// whose size is not known up front. With `-q` sftp prints nothing while a transfer runs,
+/// so there is no progress to measure; the fixed 15 s used to cut off any
+/// transfer that took longer and leave a partial remote file.
+pub(crate) fn sftp_command_timeout(command: &str) -> Duration {
+    match command.split_whitespace().next().unwrap_or("") {
+        "put" => Duration::from_millis(222_000),
+        "get" => Duration::from_millis(1_800_000),
+        _ => Duration::from_millis(NATIVE_SSH_CONTROL_READY_TIMEOUT_MS),
+    }
+}
+
 pub(crate) fn wait_for_sftp_prompt(
     child: &mut Box<dyn Child + Send + Sync>,
     output_receiver: &std::sync::mpsc::Receiver<JumpSessionEvent>,
     pending_command: &str,
 ) -> Result<String, String> {
+    let timeout = sftp_command_timeout(pending_command);
     let started_at = Instant::now();
     let mut captured_output = String::new();
     // #194: the reader now sends raw bytes, so this capture decodes through one
@@ -1556,7 +1574,7 @@ pub(crate) fn wait_for_sftp_prompt(
             Err(error) => return Err(error.to_string()),
         }
 
-        if started_at.elapsed() > Duration::from_millis(NATIVE_SSH_CONTROL_READY_TIMEOUT_MS) {
+        if started_at.elapsed() > timeout {
             let message = trim_ssh_output(&captured_output);
             return Err(if message.is_empty() {
                 "Timed out while waiting for the sftp prompt".to_string()
@@ -1565,8 +1583,7 @@ pub(crate) fn wait_for_sftp_prompt(
             });
         }
 
-        let remaining = Duration::from_millis(NATIVE_SSH_CONTROL_READY_TIMEOUT_MS)
-            .saturating_sub(started_at.elapsed());
+        let remaining = timeout.saturating_sub(started_at.elapsed());
         match output_receiver.recv_timeout(remaining) {
             Ok(JumpSessionEvent::Output(output)) => {
                 captured_output.push_str(&decoder.decode(&output));
@@ -2287,6 +2304,16 @@ pub(crate) fn execute_native_snippet_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sftp_transfers_get_longer_time_limits_than_other_commands() {
+        let control = Duration::from_millis(NATIVE_SSH_CONTROL_READY_TIMEOUT_MS);
+        assert_eq!(sftp_command_timeout(""), control);
+        assert_eq!(sftp_command_timeout("ls -la /d"), control);
+        assert_eq!(sftp_command_timeout("mkdir /d"), control);
+        assert_eq!(sftp_command_timeout("put /l /r"), Duration::from_secs(222));
+        assert_eq!(sftp_command_timeout("get /r /l"), Duration::from_secs(1800));
+    }
 
     #[test]
     fn drain_after_exit_keeps_the_last_output_and_drops_the_pty_close_error() {
