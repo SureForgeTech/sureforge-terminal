@@ -1,0 +1,1 @@
+- [FIX] A terminal session no longer drops the end of a short command's output, or reports a failed command as a clean exit, when the machine is busy (#483)

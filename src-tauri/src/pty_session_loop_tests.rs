@@ -611,3 +611,78 @@ fn jump_loop_close_command_ends_the_session() {
     assert_torn_down(&run);
     assert!(!jump_session_dir_exists(target_port));
 }
+
+// ---- exit races (found in review of #483) ----------------------------------
+
+/// The process writes a lot and exits at once. Everything it wrote must reach
+/// the UI: seeing the exit first must not end the session before the reader
+/// has drained the PTY.
+#[test]
+fn external_loop_delivers_all_output_of_a_command_that_exits_at_once() {
+    const BYTES: usize = 200_000;
+    for attempt in 0..5 {
+        let run = start_external(
+            Ok(shell_spec(
+                &format!("head -c {BYTES} /dev/zero | tr '\\0' 'x'"),
+                "Test command",
+                Vec::new(),
+                None,
+            )),
+            None,
+        );
+        run.finish();
+        let received = run
+            .sink
+            .output()
+            .bytes()
+            .filter(|byte| *byte == b'x')
+            .count();
+        assert_eq!(received, BYTES, "attempt {attempt}: output was cut short");
+        assert!(run.sink.errors().is_empty(), "{:?}", run.sink.errors());
+        assert_torn_down(&run);
+    }
+}
+
+/// A failed exit must be reported even when the reader sees end-of-file
+/// before the loop reads the exit status.
+#[test]
+fn external_loop_always_reports_a_failed_exit() {
+    for attempt in 0..40 {
+        let run = start_external(
+            Ok(shell_spec(
+                "printf x; exit 3",
+                "Test command",
+                Vec::new(),
+                None,
+            )),
+            None,
+        );
+        run.finish();
+        let errors = run.sink.errors();
+        assert_eq!(errors.len(), 1, "attempt {attempt}: {errors:?}");
+        assert!(
+            errors[0].starts_with("Test command exited with status"),
+            "attempt {attempt}: {errors:?}"
+        );
+        assert_torn_down(&run);
+    }
+}
+
+/// A clean exit must not be reported as an error, whichever of the reader's
+/// end and the exit status the loop sees first.
+#[test]
+fn external_loop_never_reports_a_clean_exit_as_an_error() {
+    for attempt in 0..40 {
+        let run = start_external(
+            Ok(shell_spec("printf x", "Test command", Vec::new(), None)),
+            None,
+        );
+        run.finish();
+        assert!(
+            run.sink.errors().is_empty(),
+            "attempt {attempt}: {:?}",
+            run.sink.errors()
+        );
+        assert!(run.sink.output().contains('x'), "attempt {attempt}");
+    }
+}

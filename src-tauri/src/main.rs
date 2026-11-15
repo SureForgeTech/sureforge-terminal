@@ -22,7 +22,9 @@ use std::{
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::{Datelike, NaiveDate, TimeZone, Utc};
 use getrandom::fill;
-use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{
+    native_pty_system, Child, ChildKiller, CommandBuilder, ExitStatus, MasterPty, PtySize,
+};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
@@ -119,6 +121,13 @@ const NATIVE_SESSION_BUFFER_LIMIT: usize = 128;
 /// than by the producer's rate. Ordering and bytes are preserved (coalescing
 /// concatenates; it never drops).
 const NATIVE_OUTPUT_COALESCE_WINDOW_MS: u64 = 12;
+/// How long a PTY session keeps reading after its process exits, so the tail
+/// of the output is not lost. Normally the PTY drains in milliseconds; the
+/// bound only matters when a background process keeps the PTY open.
+const PTY_EXIT_DRAIN_LIMIT: Duration = Duration::from_secs(2);
+/// How long a PTY session waits for its process's exit status after the
+/// output ends, so a failed exit is reported rather than missed.
+const PTY_EXIT_WAIT_LIMIT: Duration = Duration::from_secs(1);
 const NATIVE_OUTPUT_COALESCE_MAX_BYTES: usize = 64 * 1024;
 
 /// #194: decodes a byte stream as UTF-8 across arbitrary chunk boundaries.
@@ -2100,6 +2109,14 @@ fn run_pty_session<E: SessionEventSink>(
     );
     let mut should_close = false;
     let mut reported_error = false;
+    // Found in review of #483: the process's exit and the reader's end arrive
+    // in either order. Ending the session on whichever came first lost the
+    // tail of a short command's output (exit seen first) or hid a failed exit
+    // (end of output seen first). Both are now waited for, with a bound.
+    let mut exit_status: Option<ExitStatus> = None;
+    let mut exited_at: Option<Instant> = None;
+    let mut reader_done_at: Option<Instant> = None;
+    let mut reader_error: Option<String> = None;
 
     while !should_close {
         let mut did_work = false;
@@ -2147,48 +2164,55 @@ fn run_pty_session<E: SessionEventSink>(
                     }
                 }
                 Ok(JumpSessionEvent::Error(error)) => {
-                    // Emit any output received before the error first, so the
-                    // terminal shows it in order ahead of the error notice.
-                    if let Some(flushed) = coalescer.finish() {
-                        emit_native_session_output(app, session_id, state, flushed);
-                    }
-                    emit_native_session_error(app, session_id, state, error);
-                    set_native_session_connection_state(app, session_id, state, "error");
-                    reported_error = true;
-                    should_close = true;
+                    // A read error is how some systems report that the PTY
+                    // closed because the process exited. Keep it, and report
+                    // it below only if the process does not exit.
+                    reader_error.get_or_insert(error);
+                    reader_done_at.get_or_insert_with(Instant::now);
                     break;
                 }
                 Ok(JumpSessionEvent::Eof) => {
-                    should_close = true;
+                    reader_done_at.get_or_insert_with(Instant::now);
                     break;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    should_close = true;
+                    reader_done_at.get_or_insert_with(Instant::now);
                     break;
                 }
             }
         }
 
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                if !status.success() && !reported_error {
-                    emit_native_session_error(
-                        app,
-                        session_id,
-                        state,
-                        format!("{exit_label} exited with status {status}."),
-                    );
-                    set_native_session_connection_state(app, session_id, state, "error");
+        if exit_status.is_none() {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    exit_status = Some(status);
+                    exited_at = Some(Instant::now());
                 }
+                Ok(None) => {}
+                Err(error) => {
+                    if let Some(flushed) = coalescer.finish() {
+                        emit_native_session_output(app, session_id, state, flushed);
+                    }
+                    emit_native_session_error(app, session_id, state, error.to_string());
+                    set_native_session_connection_state(app, session_id, state, "error");
+                    reported_error = true;
+                    should_close = true;
+                }
+            }
+        }
+
+        // After the exit, keep reading until the PTY is drained; after the
+        // end of output, wait for the exit status. Each wait is bounded so a
+        // background process holding the PTY open, or a process that closed
+        // its terminal and kept running, cannot hold the session open.
+        match (exited_at, reader_done_at) {
+            (Some(_), Some(_)) => should_close = true,
+            (Some(exited), None) if exited.elapsed() >= PTY_EXIT_DRAIN_LIMIT => {
                 should_close = true;
             }
-            Ok(None) => {}
-            Err(error) => {
-                emit_native_session_error(app, session_id, state, error.to_string());
-                set_native_session_connection_state(app, session_id, state, "error");
-                should_close = true;
-            }
+            (None, Some(done)) if done.elapsed() >= PTY_EXIT_WAIT_LIMIT => should_close = true,
+            _ => {}
         }
 
         if let Some(flushed) = coalescer.poll_flush(Instant::now()) {
@@ -2224,8 +2248,24 @@ fn run_pty_session<E: SessionEventSink>(
         }
     }
 
+    // Output first, so the terminal shows it ahead of any error notice.
     if let Some(flushed) = coalescer.finish() {
         emit_native_session_output(app, session_id, state, flushed);
+    }
+
+    if !reported_error {
+        let failure = match (exit_status, reader_error) {
+            (Some(status), _) if !status.success() => {
+                Some(format!("{exit_label} exited with status {status}."))
+            }
+            // The process exited: a read error was the PTY closing.
+            (Some(_), _) => None,
+            (None, reader_error) => reader_error,
+        };
+        if let Some(failure) = failure {
+            emit_native_session_error(app, session_id, state, failure);
+            set_native_session_connection_state(app, session_id, state, "error");
+        }
     }
 
     let _ = child.kill();
