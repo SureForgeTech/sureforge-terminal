@@ -1,0 +1,1 @@
+- [FIX] In the native app, a failed file-browser action (new folder, rename, delete, upload, download, listing) is now reported as an error instead of looking like it worked

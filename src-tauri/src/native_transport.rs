@@ -1389,6 +1389,9 @@ pub(crate) fn run_sftp_batch_commands(
             write_jump_session_input(&writer, &format!("{interactive_command}\n"))?;
             let command_output =
                 wait_for_sftp_prompt(&mut child, &output_receiver, interactive_command)?;
+            if let Some(failure) = sftp_command_failure(interactive_command, &command_output) {
+                return Err(failure);
+            }
             session_output.push_str(&command_output);
         }
 
@@ -1434,6 +1437,36 @@ pub(crate) fn check_native_ssh_control_session(
     } else {
         Err(stderr)
     }
+}
+
+/// Interactive sftp reports a failed command by printing a line and showing
+/// the prompt again, and still exits 0, so the prompt alone does not mean
+/// success. With `-q`, a successful mkdir, rename, rm, rmdir, put or get
+/// prints nothing, so any text from them is the error; `ls` prints its listing
+/// on success and "Can't ls: ..." (or a readdir error) on failure. Checked
+/// against OpenSSH's sftp on macOS:
+///   remote mkdir "/x": Failure
+///   remote rename "/a" to "/b": No such file or directory
+///   remote delete /a: No such file or directory
+///   dest open "/x": Permission denied        (put)
+///   File "/x" not found.                     (get)
+///   Can't ls: "/x" not found
+pub(crate) fn sftp_command_failure(command: &str, output: &str) -> Option<String> {
+    let text = output.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let verb = command.split_whitespace().next().unwrap_or("");
+    if verb == "ls" {
+        let failed = text.lines().any(|line| {
+            let line = line.trim_start();
+            line.starts_with("Can't ls")
+                || line.starts_with("remote readdir")
+                || line.starts_with("Couldn't")
+        });
+        return failed.then(|| text.to_string());
+    }
+    Some(text.to_string())
 }
 
 pub(crate) fn extract_sftp_prompt_output(output: &str, pending_command: &str) -> Option<String> {
@@ -2242,6 +2275,44 @@ pub(crate) fn execute_native_snippet_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sftp_command_failure_reads_the_text_sftp_prints() {
+        // Success: nothing printed (with -q), or an ls listing.
+        for command in [
+            "mkdir /x",
+            "rename /a /b",
+            "rm /a",
+            "rmdir /d",
+            "put /l /r",
+            "get /r /l",
+        ] {
+            assert_eq!(sftp_command_failure(command, "\n"), None, "{command}");
+        }
+        assert_eq!(
+            sftp_command_failure("ls -la /d", "drwxr-xr-x    ? u g 64 Nov 14 21:49 /d/.\n"),
+            None
+        );
+        // Failure: the lines OpenSSH's sftp prints.
+        for (command, output) in [
+            ("mkdir /x", "remote mkdir \"/x\": Failure"),
+            (
+                "rename /a /b",
+                "remote rename \"/a\" to \"/b\": No such file or directory",
+            ),
+            ("rm /a", "remote delete /a: No such file or directory"),
+            ("rmdir /d", "remote rmdir \"/d\": Failure"),
+            ("put /l /r", "dest open \"/r\": Permission denied"),
+            ("get /r /l", "File \"/r\" not found."),
+            ("ls -la /x", "Can't ls: \"/x\" not found"),
+        ] {
+            assert_eq!(
+                sftp_command_failure(command, &format!("{output}\n")).as_deref(),
+                Some(output),
+                "{command}"
+            );
+        }
+    }
     #[cfg(unix)]
     use std::os::unix::fs::{symlink, PermissionsExt};
     use std::{

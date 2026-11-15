@@ -2451,3 +2451,40 @@ fn native_snippet_keeps_remote_stderr_out_of_stdout() {
         assert!(!result.ok, "{id}: a non-zero exit is not ok");
     }
 }
+
+/// Found in a bug hunt on 2026-11-14: interactive sftp reports a failed
+/// command by printing a line and showing its prompt again, and the native
+/// file browser took the prompt as success. A failed mkdir or rename must now
+/// come back as an error, while the successful ones still succeed.
+#[test]
+#[ignore = "requires an unsandboxed localhost sshd runtime"]
+fn native_sftp_reports_a_failed_command_as_an_error() {
+    let fixture = NativeTransportFixture::new();
+    let host = fixture.direct_host.clone();
+    let mkdir = |path: &str| {
+        tauri::async_runtime::block_on(terminal_workspace_sftp_create_directory(SftpPathRequest {
+            host: host.clone(),
+            path: path.to_string(),
+        }))
+    };
+
+    assert!(mkdir("made-once").is_ok(), "a first mkdir succeeds");
+    assert!(
+        mkdir("made-once").is_err(),
+        "a second mkdir of the same folder must fail"
+    );
+
+    let rename =
+        tauri::async_runtime::block_on(terminal_workspace_sftp_rename_entry(SftpRenameRequest {
+            current_path: "does-not-exist".to_string(),
+            host: host.clone(),
+            next_path: "still-does-not-exist".to_string(),
+        }));
+    let Err(message) = rename else {
+        panic!("renaming a missing entry must fail");
+    };
+    assert!(
+        message.contains("No such file") || message.contains("not found"),
+        "the error names the reason: {message}"
+    );
+}
