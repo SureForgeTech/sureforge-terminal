@@ -1,0 +1,1 @@
+- [INTERNAL] Test that the browser backend and the native app use the same app-data folder, so they share one trust store

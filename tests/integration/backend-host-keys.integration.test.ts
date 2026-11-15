@@ -158,6 +158,20 @@ describe("backend SSH host-key trust", () => {
       const resolved = resolveAppDataDirectory({});
       expect(resolved).toContain("com.abdenterprises.terminalworkspace");
     });
+
+    // The native app finds its trust store through Tauri's app-data directory,
+    // which follows the bundle identifier in tauri.conf.json. The Node backend
+    // hard-codes the same identifier. If the two ever differ, the backends
+    // silently keep two separate trust stores, so pin them to one value.
+    it("uses the same folder name as the native app's bundle identifier", async () => {
+      const { resolveAppDataDirectory } = await load();
+      const tauriConfig = JSON.parse(
+        await readFile(new URL("../../src-tauri/tauri.conf.json", import.meta.url), "utf8"),
+      ) as { identifier: string };
+      expect(tauriConfig.identifier).toMatch(/\S/);
+      const resolved = resolveAppDataDirectory({});
+      expect(resolved.split(/[\\/]/).at(-1)).toBe(tauriConfig.identifier);
+    });
   });
 
   describe("trust on first use", () => {
