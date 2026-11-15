@@ -2368,3 +2368,47 @@ fn jump_host_session_loop_runs_a_live_session_through_the_jump_sshd() {
     );
     crate::pty_session_loop_tests::assert_torn_down(&run);
 }
+
+/// MAINT-5 (2026-10-29 review): the stderrSemantics conformance entries were
+/// only re-read, never exercised. This runs a native snippet that writes to
+/// both streams, directly and through the jump host, and checks what the
+/// corpus claims for the native side: remote stderr arrives in `stderr`
+/// (possibly alongside ssh's own diagnostics), never in `stdout`, and the
+/// exit code is carried through.
+#[test]
+#[ignore = "requires an unsandboxed localhost sshd runtime"]
+fn native_snippet_keeps_remote_stderr_out_of_stdout() {
+    let fixture = NativeTransportFixture::new();
+    let results = execute_native_snippet_request(SnippetExecutionRequest {
+        command: "printf 'to-stdout'; printf 'to-stderr' >&2; exit 4".to_string(),
+        targets: vec![
+            SnippetExecutionTarget {
+                host: fixture.direct_host.clone(),
+                id: "direct".to_string(),
+                label: "Direct".to_string(),
+            },
+            SnippetExecutionTarget {
+                host: fixture.jump_target_host.clone(),
+                id: "jump".to_string(),
+                label: "Jump".to_string(),
+            },
+        ],
+    })
+    .expect("native snippet execution should succeed");
+
+    assert_eq!(results.results.len(), 2);
+    for result in &results.results {
+        let id = &result.target_id;
+        assert_eq!(
+            result.stdout, "to-stdout",
+            "{id}: stdout must hold only stdout"
+        );
+        assert!(
+            result.stderr.contains("to-stderr"),
+            "{id}: remote stderr must reach stderr: {:?}",
+            result.stderr
+        );
+        assert_eq!(result.exit_code, Some(4), "{id}");
+        assert!(!result.ok, "{id}: a non-zero exit is not ok");
+    }
+}

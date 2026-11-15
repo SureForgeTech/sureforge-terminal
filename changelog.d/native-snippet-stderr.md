@@ -1,0 +1,1 @@
+- [INTERNAL] Test that a native snippet keeps remote stderr out of stdout and carries the exit code, through a real sshd and a jump host
