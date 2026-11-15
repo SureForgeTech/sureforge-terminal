@@ -1,0 +1,1 @@
+- [FIX] When the native app cannot open a file browser or control connection, the error now keeps ssh's own reason instead of only "exited with status 255" on a busy machine
