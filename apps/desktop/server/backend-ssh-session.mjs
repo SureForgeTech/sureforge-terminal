@@ -11,6 +11,14 @@ import { SecretBuffer } from "./secrets.mjs";
 import { selectHostKeyVerifier } from "./backend-host-keys.mjs";
 import { assertHostRequestIsAllowed } from "./backend-host-validation.mjs";
 
+/**
+ * How long a session that ended before its shell opened stays in the session
+ * map. It is kept so a websocket that attaches after the failure still gets
+ * the reason (see failSession); after this it is removed, so failed sessions
+ * do not pile up for the life of the backend process.
+ */
+export const FAILED_SESSION_RETENTION_MS = 60_000;
+
 export function createSshSessionManager({
   sessions,
   getHostKeyStore,
@@ -18,7 +26,29 @@ export function createSshSessionManager({
   broadcast,
   failSession,
   expandHome,
+  failedSessionRetentionMs = FAILED_SESSION_RETENTION_MS,
 }) {
+  /**
+   * Remove a session and release everything it holds. Safe to call more than
+   * once and from any path: the shell's close, the client's close, a
+   * websocket closing on a failed session, or the retention timer.
+   */
+  async function retireSession(session) {
+    if (session.retireTimer) {
+      clearTimeout(session.retireTimer);
+      session.retireTimer = null;
+    }
+    try {
+      await closeForwardsForSession(session.id);
+    } finally {
+      if (sessions.get(session.id) === session) {
+        sessions.delete(session.id);
+      }
+      session.client.end();
+      session.jumpClient?.end();
+    }
+  }
+
   async function createConnectConfig(host) {
     // #473: every SSH connection (sessions, file transfer, remote commands,
     // each jump hop) is built here, so these rules cover them all. Checked
@@ -197,6 +227,9 @@ export function createSshSessionManager({
       // Set when the session fails, and replayed to a websocket that attaches
       // after the failure. See failSession.
       failureMessage: null,
+      // Set while a session that ended before its shell opened waits to be
+      // removed. See FAILED_SESSION_RETENTION_MS.
+      retireTimer: null,
     };
     // M05 / #87: connectClient (the short-lived path) properly destructures
     // both fields and runs scrub() in finally. createSshSession (the
@@ -254,13 +287,7 @@ export function createSshSessionManager({
             type: "status",
             state: "disconnected",
           });
-          try {
-            await closeForwardsForSession(session.id);
-          } finally {
-            sessions.delete(session.id);
-            session.client.end();
-            session.jumpClient?.end();
-          }
+          await retireSession(session);
         });
       };
 
@@ -292,8 +319,23 @@ export function createSshSessionManager({
           state: "disconnected",
         });
       }
-      void closeForwardsForSession(session.id);
-      session.jumpClient?.end();
+      if (session.stream) {
+        // The shell's own close handler retires the session.
+        void closeForwardsForSession(session.id);
+        session.jumpClient?.end();
+        return;
+      }
+      // The connection ended before a shell opened (a refused login, an
+      // unreachable host, a rejected host key). Nothing else would ever
+      // remove it, so keep it only long enough to report the failure to a
+      // websocket that has not attached yet.
+      if (!session.retireTimer && sessions.get(session.id) === session) {
+        session.retireTimer = setTimeout(() => {
+          session.retireTimer = null;
+          void retireSession(session);
+        }, failedSessionRetentionMs);
+        session.retireTimer.unref?.();
+      }
     });
 
     try {
@@ -313,5 +355,6 @@ export function createSshSessionManager({
     openJumpSocket,
     connectClient,
     createSshSession,
+    retireSession,
   };
 }

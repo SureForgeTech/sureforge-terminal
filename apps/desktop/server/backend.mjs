@@ -258,6 +258,7 @@ function getHostKeyStore() {
 const {
   connectClient,
   createSshSession,
+  retireSession,
 } = createSshSessionManager({
   sessions,
   getHostKeyStore,
@@ -1035,10 +1036,8 @@ const server = createServer(async (request, response) => {
   if (request.method === "DELETE" && deleteMatch) {
     const session = sessions.get(deleteMatch[1]);
     if (session) {
-      await closeForwardsForSession(session.id);
       session.stream?.close();
-      session.client.end();
-      sessions.delete(session.id);
+      await retireSession(session);
     }
     sendJson(response, 200, { ok: true });
     return;
@@ -1167,6 +1166,13 @@ server.on("upgrade", (request, socket, head) => {
     ws.on("close", () => {
       if (session.ws === ws) {
         session.ws = null;
+      }
+      // A failed session has nothing left to report once its websocket has
+      // seen the failure and gone; nothing else would remove it.
+      // (Its state moves on to "disconnected" when the connection closes, so
+      // the failure is recognised by its message and the missing shell.)
+      if (session.failureMessage && !session.stream) {
+        void retireSession(session);
       }
     });
   });

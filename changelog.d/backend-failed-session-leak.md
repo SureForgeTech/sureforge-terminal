@@ -1,0 +1,1 @@
+- [FIX] In browser mode, a connection that fails before its shell opens no longer stays in the backend's memory until the backend restarts
