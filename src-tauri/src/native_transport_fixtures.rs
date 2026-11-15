@@ -2399,9 +2399,12 @@ fn native_snippet_keeps_remote_stderr_out_of_stdout() {
     assert_eq!(results.results.len(), 2);
     for result in &results.results {
         let id = &result.target_id;
-        assert_eq!(
-            result.stdout, "to-stdout",
-            "{id}: stdout must hold only stdout"
+        // `ends_with`, not equality: the snippet runs in a login shell, and a
+        // login script on the test machine may print before it.
+        assert!(
+            result.stdout.ends_with("to-stdout") && !result.stdout.contains("to-stderr"),
+            "{id}: stdout must hold the command's stdout and no stderr: {:?}",
+            result.stdout
         );
         assert!(
             result.stderr.contains("to-stderr"),
