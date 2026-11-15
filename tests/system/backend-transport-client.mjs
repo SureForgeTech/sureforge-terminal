@@ -369,8 +369,11 @@ async function main() {
         streamsResult?.stdout?.endsWith("to-stdout") &&
         !streamsResult?.stdout?.includes("to-stderr"),
       `status ${streams.status} body ${streams.text.slice(0, 300)}`);
+    // `includes`, like stdout's `endsWith`: sshd runs the command through the
+    // account's real shell, whose startup files may print on some machines.
     check("exec reports the remote's stderr on its own",
-      streamsResult?.stderr === "to-stderr",
+      streamsResult?.stderr?.includes("to-stderr") === true &&
+        !streamsResult?.stderr?.includes("to-stdout"),
       `stderr ${JSON.stringify(streamsResult?.stderr)}`);
     check("exec carries a non-zero exit code and is not ok",
       streamsResult?.exitCode === 4 && streamsResult?.ok === false,
