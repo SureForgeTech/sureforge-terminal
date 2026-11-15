@@ -2339,8 +2339,8 @@ fn run_pty_session<E: SessionEventSink>(
     Ok(())
 }
 
-/// Shared teardown, in the order both paths have always used: report a
-/// failure, close the session's forwards, drop it from the registry, report
+/// Shared teardown: report a failure, drop the session from the registry,
+/// close its forwards (in that order; see the comment below), report
 /// disconnected, remove `cleanup_before_close` if any, then send close.
 fn finish_pty_session<E: SessionEventSink>(
     app: &E,
@@ -2356,8 +2356,12 @@ fn finish_pty_session<E: SessionEventSink>(
         set_native_session_connection_state(app, session_id, state, "error");
     }
 
-    close_native_forwards_for_session(forward_registry, session_id);
+    // Session first, then its forwards: a forward that create_native_forward
+    // registers after this removal sees the session gone and stops itself,
+    // and one registered before it is closed here. The other order left a
+    // gap between the two steps where a new forward was missed.
     remove_native_session(registry, session_id);
+    close_native_forwards_for_session(forward_registry, session_id);
     set_native_session_connection_state(app, session_id, state, "disconnected");
 
     if let Some(cleanup_dir) = cleanup_before_close {
@@ -2592,8 +2596,9 @@ fn run_native_session_loop(
     let _ = channel.close();
     let _ = channel.wait_close();
     let _ = session.disconnect(None, "Terminal Workspace session closed", None);
-    close_native_forwards_for_session(&forward_registry, &session_id);
+    // Session first, then its forwards (see finish_pty_session).
     remove_native_session(&registry, &session_id);
+    close_native_forwards_for_session(&forward_registry, &session_id);
     set_native_session_connection_state(&app, &session_id, &state, "disconnected");
 
     let stream_id = {
@@ -4508,6 +4513,9 @@ async fn terminal_workspace_create_backend_session(
 
         if let Err(error) = connect_result {
             remove_native_session(native_sessions.inner(), &session_id);
+            // A forward started while this connect was in progress registered
+            // against the session; close it like any other teardown does.
+            close_native_forwards_for_session(native_forwards.inner(), &session_id);
             return Err(error);
         }
         // Direct SSH is connected once connect_native_session returns; the
@@ -6448,6 +6456,84 @@ mod tests {
         );
         // A second remove (a fast loop exit racing the failure cleanup) is safe.
         assert!(remove_native_session(&registry, "s1").is_none());
+    }
+
+    /// Counts kills, so a test can see whether a forward was closed.
+    #[derive(Clone, Debug)]
+    struct CountingKiller(Arc<std::sync::atomic::AtomicUsize>);
+
+    impl ChildKiller for CountingKiller {
+        fn kill(&mut self) -> io::Result<()> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+        fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+            Box::new(self.clone())
+        }
+    }
+
+    fn register_test_forward(
+        forwards: &NativeForwardRegistry,
+        session_id: &str,
+        forward_id: &str,
+    ) -> Arc<std::sync::atomic::AtomicUsize> {
+        let kills = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        insert_native_forward(
+            forwards,
+            forward_id,
+            NativeForwardHandle {
+                killer: Arc::new(Mutex::new(Box::new(CountingKiller(kills.clone())))),
+                record: PortForwardRecord {
+                    created_at: String::new(),
+                    direction: "local".to_string(),
+                    id: forward_id.to_string(),
+                    local_host: "127.0.0.1".to_string(),
+                    local_port: 15432,
+                    remote_host: "127.0.0.1".to_string(),
+                    remote_port: 5432,
+                    session_id: session_id.to_string(),
+                },
+            },
+        );
+        kills
+    }
+
+    #[test]
+    fn a_forward_whose_session_closed_while_it_started_is_closed() {
+        // The forward registers after its session's cleanup already ran: it
+        // must close itself rather than outlive the session.
+        let sessions = NativeSessionRegistry::default();
+        let forwards = NativeForwardRegistry::default();
+        let kills = register_test_forward(&forwards, "gone", "f1");
+
+        assert!(discard_forward_if_session_closed(
+            &sessions, &forwards, "gone", "f1"
+        ));
+        assert_eq!(kills.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(list_native_forwards(&forwards, "gone").is_empty());
+    }
+
+    #[test]
+    fn a_forward_whose_session_is_open_is_kept() {
+        let sessions = NativeSessionRegistry::default();
+        let (command_sender, _command_receiver) = channel(NATIVE_SESSION_COMMAND_CHANNEL_CAPACITY);
+        insert_native_session(
+            &sessions,
+            "live",
+            NativeSessionHandle {
+                command_sender,
+                host: minimal_ssh_host(),
+                state: Arc::new(Mutex::new(NativeSessionState::default())),
+            },
+        );
+        let forwards = NativeForwardRegistry::default();
+        let kills = register_test_forward(&forwards, "live", "f2");
+
+        assert!(!discard_forward_if_session_closed(
+            &sessions, &forwards, "live", "f2"
+        ));
+        assert_eq!(kills.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(list_native_forwards(&forwards, "live").len(), 1);
     }
 
     #[test]

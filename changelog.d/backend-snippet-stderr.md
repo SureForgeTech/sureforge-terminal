@@ -1,0 +1,1 @@
+- [INTERNAL] The browser-backend transport fixture checks that a snippet keeps remote stderr separate from stdout and carries the exit code

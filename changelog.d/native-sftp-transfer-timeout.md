@@ -1,0 +1,1 @@
+- [FIX] In the native app, file-browser uploads and downloads are no longer cut off after 15 seconds, which left a partial file on the server

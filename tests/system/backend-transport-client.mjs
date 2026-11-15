@@ -7,6 +7,7 @@
 // automated path where a broken SSH handshake, auth gate, or session lifecycle
 // actually fails a build.
 
+import net from "node:net";
 import { createRequire } from "node:module";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -335,6 +336,70 @@ async function main() {
     check("terminal input reached the remote and its output came back",
       terminal.output.includes(marker));
 
+    console.log("[client] two remote forwards on one session");
+    // Found in a bug hunt on 2026-11-14: each remote forward added its own
+    // "tcp connection" listener, and each listener rejected connections meant
+    // for the others, so with two forwards neither carried traffic.
+    const servers = [];
+    const answer = (reply) =>
+      new Promise((resolve) => {
+        const server = net.createServer((socket) => socket.end(reply));
+        server.listen(0, "127.0.0.1", () => resolve(server));
+      });
+    const readFrom = (port) =>
+      new Promise((resolve) => {
+        const socket = net.connect(port, "127.0.0.1");
+        let text = "";
+        socket.setTimeout(5000, () => socket.destroy());
+        socket.on("data", (chunk) => (text += chunk.toString("utf8")));
+        socket.on("close", () => resolve(text));
+        socket.on("error", () => resolve(text));
+      });
+    try {
+      servers.push(await answer("from-local-a"), await answer("from-local-b"));
+      const made = [];
+      for (const server of servers) {
+        const response = await api("/api/backend/forwards", {
+          method: "POST",
+          token: TOKEN,
+          body: {
+            direction: "remote",
+            sessionId,
+            localHost: "127.0.0.1",
+            localPort: server.address().port,
+            remoteHost: "127.0.0.1",
+            remotePort: 0,
+          },
+        });
+        made.push(response);
+      }
+      check("both remote forwards were created",
+        made.every((response) => response.status === 200 && response.json?.remotePort > 0),
+        made.map((response) => `${response.status} ${response.text.slice(0, 120)}`).join(" | "));
+      const [first, second] = made.map((response) => response.json?.remotePort);
+      check("the first remote forward carries its own traffic",
+        (await readFrom(first)) === "from-local-a");
+      check("the second remote forward carries its own traffic",
+        (await readFrom(second)) === "from-local-b");
+      const removed = [];
+      for (const response of made) {
+        if (response.json?.id) {
+          removed.push(
+            await api(`/api/backend/forwards/${response.json.id}`, { method: "DELETE", token: TOKEN })
+          );
+        }
+      }
+      check("both remote forwards were stopped", removed.length === 2 &&
+        removed.every((response) => response.status === 200),
+        removed.map((response) => response.status).join(","));
+      check("a stopped remote forward no longer carries traffic",
+        (await readFrom(first)) === "");
+    } finally {
+      for (const server of servers) {
+        server.close();
+      }
+    }
+
     console.log("[client] exec endpoint");
     // A different code path from the interactive shell: this is ssh2's
     // client.exec(), which the WS session never touches.
@@ -351,6 +416,33 @@ async function main() {
     check("exec ran and returned its output",
       snippet.status === 200 && result?.ok === true && result?.stdout?.includes(execMarker),
       `status ${snippet.status} body ${snippet.text.slice(0, 300)}`);
+
+    // MAINT-5 (2026-10-29 review): the stderrSemantics corpus says the Node
+    // backend reports the remote's stderr only, separately from stdout. Run a
+    // command that writes to both and exits 4, and check exactly that.
+    const streams = await api("/api/backend/snippets/execute", {
+      method: "POST",
+      token: TOKEN,
+      body: {
+        command: "printf 'to-stdout'; printf 'to-stderr' >&2; exit 4",
+        targets: [{ id: "fixture", label: "fixture", host: fixtureHost() }],
+      },
+    });
+    const streamsResult = streams.json?.results?.[0];
+    check("exec keeps the remote's stderr out of stdout",
+      streams.status === 200 &&
+        streamsResult?.stdout?.endsWith("to-stdout") &&
+        !streamsResult?.stdout?.includes("to-stderr"),
+      `status ${streams.status} body ${streams.text.slice(0, 300)}`);
+    // `includes`, like stdout's `endsWith`: sshd runs the command through the
+    // account's real shell, whose startup files may print on some machines.
+    check("exec reports the remote's stderr on its own",
+      streamsResult?.stderr?.includes("to-stderr") === true &&
+        !streamsResult?.stderr?.includes("to-stdout"),
+      `stderr ${JSON.stringify(streamsResult?.stderr)}`);
+    check("exec carries a non-zero exit code and is not ok",
+      streamsResult?.exitCode === 4 && streamsResult?.ok === false,
+      `exitCode ${streamsResult?.exitCode} ok ${streamsResult?.ok}`);
 
     console.log("[client] sftp endpoint");
     const listing = await api("/api/backend/sftp/list", {

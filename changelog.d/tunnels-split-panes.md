@@ -1,0 +1,1 @@
+- [FIX] The Tunnels page now lists port forwards opened from every pane of a split tab, not only the focused one

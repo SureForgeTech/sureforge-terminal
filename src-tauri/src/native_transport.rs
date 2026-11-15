@@ -1366,12 +1366,13 @@ pub(crate) fn run_sftp_batch_commands(
         .try_clone_reader()
         .map_err(|error| error.to_string())?;
     let master = pair.master;
-    // #193: deliberately UNBOUNDED, unlike the live session loops. This receiver
-    // is reused across prompt waits and stops draining while the next command is
-    // issued, so a bounded queue would stall the reader mid-capture. The capture
-    // accumulates into an unbounded String anyway, so bounding only the channel
-    // would not give this path a memory bound — that needs its own truncation
-    // policy, not a channel size.
+    // Bounded, like the live session loops (#205; this comment used to call
+    // the channel unbounded, which #193 made it and #205 reversed). The
+    // receiver is reused across prompt waits and is not drained while the next
+    // command is issued, so a full queue makes the reader wait, which holds
+    // back the sftp process's output until the next wait drains it; nothing is
+    // lost. The capture still accumulates into an unbounded String, so the
+    // channel size is not this path's memory bound.
     let (output_sender, output_receiver) =
         std::sync::mpsc::sync_channel(NATIVE_SESSION_EVENT_CHANNEL_CAPACITY);
     spawn_jump_session_reader(
@@ -1488,11 +1489,80 @@ pub(crate) fn extract_sftp_prompt_output(output: &str, pending_command: &str) ->
     Some(body)
 }
 
+/// How long a capture keeps reading after its process exited. The PTY normally
+/// drains in milliseconds; the bound covers a process that left a child
+/// holding it open, and an sftp client that handed its terminal to a running
+/// SSH control master (ControlMaster auto), which may close it later. Only a
+/// failed operation pays this wait.
+const EXITED_PROCESS_DRAIN_LIMIT: Duration = Duration::from_millis(500);
+
+/// After the process has exited, collect the output the reader still has, so
+/// an error built from it carries ssh's own reason ("Permission denied ...")
+/// rather than only "exited with status 255". The exit can be seen before the
+/// reader delivers its last output, most often on a busy machine. A read error
+/// at this point is the PTY closing and is not added to the text.
+pub(crate) fn drain_exited_process_output(
+    receiver: &std::sync::mpsc::Receiver<JumpSessionEvent>,
+    decoder: &mut crate::Utf8StreamDecoder,
+    captured: &mut String,
+    limit: Duration,
+) {
+    let deadline = Instant::now() + limit;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match receiver.recv_timeout(remaining) {
+            Ok(JumpSessionEvent::Output(output)) => captured.push_str(&decoder.decode(&output)),
+            Ok(JumpSessionEvent::Eof) | Ok(JumpSessionEvent::Error(_)) | Err(_) => break,
+        }
+    }
+    captured.push_str(&decoder.finish());
+}
+
+/// How long one sftp command may take before the batch gives up. Listing,
+/// mkdir, rename and delete keep the control timeout. A transfer gets the
+/// budgets the browser runtime uses (backend-deadline.mjs): 222 s for an
+/// upload (about 48 MiB at a pessimistic 256 KiB/s, the browser runtime's
+/// request cap; the native path has no such cap, so a larger upload over a
+/// slow link can still time out) and a 30-minute ceiling for a download,
+/// whose size is not known up front. The browser runtime also stops a
+/// download after 30 s with no data; the native path cannot see progress, so
+/// it has only the ceiling, and a server that stays connected but stops
+/// sending holds a download for up to 30 minutes (keep-alives still end a
+/// dead connection in about 45 s). With `-q` sftp prints nothing while a transfer runs,
+/// so there is no progress to measure; the fixed 15 s used to cut off any
+/// transfer that took longer and leave a partial remote file.
+pub(crate) fn sftp_command_timeout(command: &str) -> Duration {
+    match command.split_whitespace().next().unwrap_or("") {
+        "put" => Duration::from_millis(222_000),
+        "get" => Duration::from_millis(1_800_000),
+        _ => Duration::from_millis(NATIVE_SSH_CONTROL_READY_TIMEOUT_MS),
+    }
+}
+
+/// What the user reads when an sftp step runs out of time: a transfer names
+/// itself and its limit, rather than the generic prompt wait.
+pub(crate) fn sftp_timeout_message(command: &str, timeout: Duration) -> String {
+    let limit = if timeout.as_secs() >= 120 {
+        format!("{} minutes", timeout.as_secs().div_ceil(60))
+    } else {
+        format!("{} seconds", timeout.as_secs())
+    };
+    match command.split_whitespace().next().unwrap_or("") {
+        "put" => format!("The upload did not finish within {limit}, so it was stopped."),
+        "get" => format!("The download did not finish within {limit}, so it was stopped."),
+        _ => "Timed out while waiting for the sftp prompt".to_string(),
+    }
+}
+
 pub(crate) fn wait_for_sftp_prompt(
     child: &mut Box<dyn Child + Send + Sync>,
     output_receiver: &std::sync::mpsc::Receiver<JumpSessionEvent>,
     pending_command: &str,
 ) -> Result<String, String> {
+    let timeout = sftp_command_timeout(pending_command);
     let started_at = Instant::now();
     let mut captured_output = String::new();
     // #194: the reader now sends raw bytes, so this capture decodes through one
@@ -1539,6 +1609,12 @@ pub(crate) fn wait_for_sftp_prompt(
 
         match child.try_wait() {
             Ok(Some(status)) => {
+                drain_exited_process_output(
+                    output_receiver,
+                    &mut decoder,
+                    &mut captured_output,
+                    EXITED_PROCESS_DRAIN_LIMIT,
+                );
                 let message = trim_ssh_output(&captured_output);
                 return Err(if message.is_empty() {
                     format!("sftp exited with status {status}")
@@ -1550,17 +1626,16 @@ pub(crate) fn wait_for_sftp_prompt(
             Err(error) => return Err(error.to_string()),
         }
 
-        if started_at.elapsed() > Duration::from_millis(NATIVE_SSH_CONTROL_READY_TIMEOUT_MS) {
+        if started_at.elapsed() > timeout {
             let message = trim_ssh_output(&captured_output);
             return Err(if message.is_empty() {
-                "Timed out while waiting for the sftp prompt".to_string()
+                sftp_timeout_message(pending_command, timeout)
             } else {
                 message
             });
         }
 
-        let remaining = Duration::from_millis(NATIVE_SSH_CONTROL_READY_TIMEOUT_MS)
-            .saturating_sub(started_at.elapsed());
+        let remaining = timeout.saturating_sub(started_at.elapsed());
         match output_receiver.recv_timeout(remaining) {
             Ok(JumpSessionEvent::Output(output)) => {
                 captured_output.push_str(&decoder.decode(&output));
@@ -1689,6 +1764,12 @@ pub(crate) fn open_native_ssh_control_session(
 
             match child.try_wait() {
                 Ok(Some(status)) => {
+                    drain_exited_process_output(
+                        &output_receiver,
+                        &mut decoder,
+                        &mut captured_output,
+                        EXITED_PROCESS_DRAIN_LIMIT,
+                    );
                     let message = trim_ssh_output(&captured_output);
                     return Err(if message.is_empty() {
                         format!("SSH control session exited with status {status}")
@@ -2148,7 +2229,38 @@ pub(crate) fn create_native_forward(
         },
     );
 
+    // Opening the forward's connection can take seconds. If the session
+    // closed meanwhile, its cleanup ran before this forward was registered
+    // and could not close it, so it would outlive the session, unlisted,
+    // until the app quit.
+    if discard_forward_if_session_closed(
+        native_sessions,
+        native_forwards,
+        &request.session_id,
+        &forward_id,
+    ) {
+        return Err("The session closed while the port forward was starting.".to_string());
+    }
+
     Ok(record)
+}
+
+/// Close and remove a just-registered forward whose session is gone. Session
+/// teardown removes the session before closing its forwards, so together with
+/// this check every forward is closed by one side or the other.
+pub(crate) fn discard_forward_if_session_closed(
+    native_sessions: &NativeSessionRegistry,
+    native_forwards: &NativeForwardRegistry,
+    session_id: &str,
+    forward_id: &str,
+) -> bool {
+    if get_native_session(native_sessions, session_id).is_some() {
+        return false;
+    }
+    if let Some(handle) = remove_native_forward(native_forwards, forward_id) {
+        close_native_forward_handle(handle);
+    }
+    true
 }
 
 pub(crate) fn delete_native_forward(
@@ -2312,6 +2424,73 @@ mod tests {
                 "{command}"
             );
         }
+    }
+
+    #[test]
+    fn sftp_timeout_message_names_the_transfer_and_its_limit() {
+        assert_eq!(
+            sftp_timeout_message("put /l /r", Duration::from_secs(222)),
+            "The upload did not finish within 4 minutes, so it was stopped."
+        );
+        assert_eq!(
+            sftp_timeout_message("get /r /l", Duration::from_secs(1800)),
+            "The download did not finish within 30 minutes, so it was stopped."
+        );
+        assert_eq!(
+            sftp_timeout_message("ls -la /d", Duration::from_secs(15)),
+            "Timed out while waiting for the sftp prompt"
+        );
+    }
+
+    #[test]
+    fn sftp_transfers_get_longer_time_limits_than_other_commands() {
+        let control = Duration::from_millis(NATIVE_SSH_CONTROL_READY_TIMEOUT_MS);
+        assert_eq!(sftp_command_timeout(""), control);
+        assert_eq!(sftp_command_timeout("ls -la /d"), control);
+        assert_eq!(sftp_command_timeout("mkdir /d"), control);
+        assert_eq!(sftp_command_timeout("put /l /r"), Duration::from_secs(222));
+        assert_eq!(sftp_command_timeout("get /r /l"), Duration::from_secs(1800));
+    }
+
+    #[test]
+    fn drain_after_exit_keeps_the_last_output_and_drops_the_pty_close_error() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        sender
+            .send(JumpSessionEvent::Output(
+                b"ops@db: Permission denied ".to_vec(),
+            ))
+            .unwrap();
+        sender
+            .send(JumpSessionEvent::Output(b"(publickey).\r\n".to_vec()))
+            .unwrap();
+        sender
+            .send(JumpSessionEvent::Error("Input/output error".to_string()))
+            .unwrap();
+        let mut decoder = crate::Utf8StreamDecoder::default();
+        let mut captured = String::new();
+        drain_exited_process_output(
+            &receiver,
+            &mut decoder,
+            &mut captured,
+            Duration::from_secs(5),
+        );
+        assert_eq!(captured, "ops@db: Permission denied (publickey).\r\n");
+    }
+
+    #[test]
+    fn drain_after_exit_is_bounded_when_the_reader_never_ends() {
+        let (_sender, receiver) = std::sync::mpsc::channel::<JumpSessionEvent>();
+        let mut decoder = crate::Utf8StreamDecoder::default();
+        let mut captured = String::new();
+        let started = Instant::now();
+        drain_exited_process_output(
+            &receiver,
+            &mut decoder,
+            &mut captured,
+            Duration::from_millis(100),
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(captured.is_empty());
     }
     #[cfg(unix)]
     use std::os::unix::fs::{symlink, PermissionsExt};
