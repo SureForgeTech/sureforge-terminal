@@ -1,4 +1,5 @@
 import type { SshConfigImportSkip } from "./ssh-config";
+import { errorMessageFromUnknown } from "./error-message";
 
 /**
  * Result of expanding `Include` directives in an OpenSSH config text. The
@@ -244,7 +245,7 @@ async function expandText(
         } catch (error) {
           skipped.push({
             reason: "include-directive",
-            detail: `Include ${entry} (glob error: ${(error as Error).message})`,
+            detail: `Include ${entry} (glob error: ${errorMessageFromUnknown(error)})`,
           });
           continue;
         }
@@ -295,7 +296,7 @@ async function expandText(
       } catch (error) {
         skipped.push({
           reason: "include-directive",
-          detail: `Include ${entry} (read error: ${(error as Error).message})`,
+          detail: `Include ${entry} (read error: ${errorMessageFromUnknown(error)})`,
         });
         continue;
       }

@@ -175,6 +175,18 @@ describe("resolveSshIncludes", () => {
     expect(text).toContain("Host ok");
   });
 
+  it("names the reason when a read fails with a plain string, not 'undefined'", async () => {
+    const readFile = vi.fn(async () => {
+      throw "permission denied by policy";
+    });
+
+    const { skipped } = await resolveSshIncludes("Include ~/.ssh/forbidden\n", { readFile });
+
+    const detail = skipped.find((entry) => entry.reason === "include-directive")?.detail ?? "";
+    expect(detail).toContain("permission denied by policy");
+    expect(detail).not.toContain("undefined");
+  });
+
   it("expands multiple paths on a single Include line", async () => {
     const readFile = fileReaderFromMap({
       "~/.ssh/a": "Host a\n  HostName a.example.com\n",
