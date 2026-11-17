@@ -2,20 +2,22 @@
 
 ## How to contribute
 
-Issues are welcome: bug reports, questions and ideas. Pull requests from
-outside contributors are not accepted for now: the maintainers write all
-changes themselves, so every change is written and reviewed by the maintainers.
-A pull request from outside may be closed without review. Open an issue describing the change instead.
+Issues and pull requests are both welcome.
 
-- For how to write a good issue, see the
+- **Bugs, questions and ideas:** open an issue. For how to write a good one, see the
   [SureForgeTech contributing guide](https://github.com/SureForgeTech/.github/blob/main/CONTRIBUTING.md).
+- **Code:** open or comment on an issue first for anything larger than a small fix, so we agree
+  on the approach, and link that issue in your pull request.
+- **Sign off every commit** with `git commit -s`. This adds a `Signed-off-by:` line certifying the
+  [Developer Certificate of Origin](https://developercertificate.org/): you wrote the change or have
+  the right to submit it under this project's licence (Apache-2.0). A check confirms the sign-off on
+  pull requests from outside contributors.
+- Every pull request gets an independent review and must pass the required checks before a
+  maintainer merges it.
 - For **security vulnerabilities**, do **not** open a public issue — follow
   [SECURITY.md](SECURITY.md) instead.
 
-The rest of this document is for maintainers: setup, checks and conventions
-for landing a change.
-
-## For maintainers: getting started
+## Getting started
 
 1. `npm run setup` — installs workspace dependencies through the pinned `pnpm`
    toolchain (no global `pnpm` required).
@@ -27,7 +29,7 @@ for landing a change.
 For native (Tauri) development and the macOS release pipeline, see
 [docs/development.md](docs/development.md) and [docs/release.md](docs/release.md).
 
-## For maintainers: before opening a pull request
+## Before opening a pull request
 
 Run the local gate that mirrors CI as closely as practical:
 
@@ -44,7 +46,7 @@ If you touched the Rust crate, also run:
 CI runs the same checks (`validate`, `rust-validate`, CodeQL). A pull request
 should be green before review.
 
-## For maintainers: pull request guidelines
+## Pull request guidelines
 
 - Keep changes scoped to a single concern; avoid drive-by formatting, import
   reordering, or unrelated renames.
