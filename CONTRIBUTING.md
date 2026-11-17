@@ -1,9 +1,21 @@
 # Contributing to Terminal Workspace
 
-Thanks for your interest in contributing! This document covers the basics for
-getting set up and landing a change.
+## How to contribute
 
-## Getting started
+Issues are welcome: bug reports, questions and ideas. Pull requests from
+outside contributors are not accepted for now, so that the project keeps a
+single copyright holder; a pull request from outside may be closed without
+review. Open an issue describing the change instead.
+
+- For how to write a good issue, see the
+  [SureForgeTech contributing guide](https://github.com/SureForgeTech/.github/blob/main/CONTRIBUTING.md).
+- For **security vulnerabilities**, do **not** open a public issue — follow
+  [SECURITY.md](SECURITY.md) instead.
+
+The rest of this document is for maintainers: setup, checks and conventions
+for landing a change.
+
+## For maintainers: getting started
 
 1. `npm run setup` — installs workspace dependencies through the pinned `pnpm`
    toolchain (no global `pnpm` required).
@@ -15,7 +27,7 @@ getting set up and landing a change.
 For native (Tauri) development and the macOS release pipeline, see
 [docs/development.md](docs/development.md) and [docs/release.md](docs/release.md).
 
-## Before you open a pull request
+## For maintainers: before opening a pull request
 
 Run the local gate that mirrors CI as closely as practical:
 
@@ -32,7 +44,7 @@ If you touched the Rust crate, also run:
 CI runs the same checks (`validate`, `rust-validate`, CodeQL). A pull request
 should be green before review.
 
-## Pull request guidelines
+## For maintainers: pull request guidelines
 
 - Keep changes scoped to a single concern; avoid drive-by formatting, import
   reordering, or unrelated renames.
@@ -46,11 +58,6 @@ should be green before review.
 Use [Conventional Commits](https://www.conventionalcommits.org/) prefixes
 (`feat:`, `fix:`, `chore:`, `ci:`, `docs:`, …). Keep the subject imperative and
 under ~72 characters; put detail in the body.
-
-## Reporting bugs and requesting features
-
-Open a GitHub issue. For **security vulnerabilities**, do **not** open a public
-issue — follow [SECURITY.md](SECURITY.md) instead.
 
 ## License
 

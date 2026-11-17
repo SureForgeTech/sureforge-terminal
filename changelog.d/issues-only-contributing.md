@@ -1,0 +1,1 @@
+- [INTERNAL] CONTRIBUTING.md now says issues are welcome and outside pull requests are not accepted for now, and labels the setup and pull request sections as maintainer notes
