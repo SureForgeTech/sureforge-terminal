@@ -1,7 +1,21 @@
 # Contributing to Terminal Workspace
 
-Thanks for your interest in contributing! This document covers the basics for
-getting set up and landing a change.
+## How to contribute
+
+Issues and pull requests are both welcome.
+
+- **Bugs, questions and ideas:** open an issue. For how to write a good one, see the
+  [SureForgeTech contributing guide](https://github.com/SureForgeTech/.github/blob/main/CONTRIBUTING.md).
+- **Code:** open or comment on an issue first for anything larger than a small fix, so we agree
+  on the approach, and link that issue in your pull request.
+- **Sign off every commit** with `git commit -s`. This adds a `Signed-off-by:` line certifying the
+  [Developer Certificate of Origin](https://developercertificate.org/): you wrote the change or have
+  the right to submit it under this project's licence (Apache-2.0). A check confirms the sign-off on
+  pull requests from outside contributors.
+- Every pull request gets an independent review and must pass the required checks before a
+  maintainer merges it.
+- For **security vulnerabilities**, do **not** open a public issue — follow
+  [SECURITY.md](SECURITY.md) instead.
 
 ## Getting started
 
@@ -15,7 +29,7 @@ getting set up and landing a change.
 For native (Tauri) development and the macOS release pipeline, see
 [docs/development.md](docs/development.md) and [docs/release.md](docs/release.md).
 
-## Before you open a pull request
+## Before opening a pull request
 
 Run the local gate that mirrors CI as closely as practical:
 
@@ -46,11 +60,6 @@ should be green before review.
 Use [Conventional Commits](https://www.conventionalcommits.org/) prefixes
 (`feat:`, `fix:`, `chore:`, `ci:`, `docs:`, …). Keep the subject imperative and
 under ~72 characters; put detail in the body.
-
-## Reporting bugs and requesting features
-
-Open a GitHub issue. For **security vulnerabilities**, do **not** open a public
-issue — follow [SECURITY.md](SECURITY.md) instead.
 
 ## License
 

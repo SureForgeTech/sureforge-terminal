@@ -1,0 +1,1 @@
+- [INTERNAL] Contributing guide: pull requests welcome with a DCO sign-off; a check verifies sign-off on outside contributions. (#611)
