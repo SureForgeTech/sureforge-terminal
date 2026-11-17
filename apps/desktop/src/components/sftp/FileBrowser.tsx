@@ -95,6 +95,11 @@ export function FileBrowser({ host }: FileBrowserProps) {
    * breadcrumb, with rename/delete then acting on the wrong one.
    */
   const loadGuardRef = useRef(createLatestRequestGuard());
+  const activeHostRef = useRef<string | undefined>(host.id);
+  useEffect(() => {
+    activeHostRef.current = host.id;
+    return () => { activeHostRef.current = undefined; };
+  }, [host.id]);
 
   const loadDirectory = useCallback(async (targetPath: string, interactive = false) => {
     // Claimed before any await, so a second navigation supersedes this one even
@@ -269,7 +274,10 @@ export function FileBrowser({ host }: FileBrowserProps) {
       }
 
       setDraftAction(null);
-      await loadDirectory(currentPath);
+      const latestPath = useTransfersStore.getState().remotePathByHost[host.id] ?? host.sftpRoot ?? "/";
+      if (activeHostRef.current === host.id && latestPath === currentPath) {
+        await loadDirectory(currentPath);
+      }
     } catch (error) {
       setErrorMessage(formatBackendFailure(error));
     }
@@ -297,7 +305,10 @@ export function FileBrowser({ host }: FileBrowserProps) {
           await uploadRemoteFile(buildBackendConnection(host, knownHosts), remotePath, file);
         }
       );
-      await loadDirectory(currentPath);
+      const latestPath = useTransfersStore.getState().remotePathByHost[host.id] ?? host.sftpRoot ?? "/";
+      if (activeHostRef.current === host.id && latestPath === currentPath) {
+        await loadDirectory(currentPath);
+      }
     } catch (error) {
       setErrorMessage(formatBackendFailure(error));
     }
@@ -372,7 +383,10 @@ export function FileBrowser({ host }: FileBrowserProps) {
       if (selectedEntry?.path === deleteTarget.path) {
         setSelectedEntry(undefined);
       }
-      await loadDirectory(currentPath);
+      const latestPath = useTransfersStore.getState().remotePathByHost[host.id] ?? host.sftpRoot ?? "/";
+      if (activeHostRef.current === host.id && latestPath === currentPath) {
+        await loadDirectory(currentPath);
+      }
     } catch (error) {
       setErrorMessage(formatBackendFailure(error));
     }

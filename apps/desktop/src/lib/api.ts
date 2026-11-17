@@ -485,6 +485,14 @@ export async function listLocalForwards(sessionId: string) {
 }
 
 export async function createLocalForward(payload: CreateForwardPayload) {
+  for (const [label, port, bind] of [
+    ["Local", payload.localPort, payload.direction === "local"],
+    ["Remote", payload.remotePort, payload.direction === "remote"],
+  ] as const) {
+    if (!Number.isInteger(port) || port < (bind ? 0 : 1) || port > 65535) {
+      throw new Error(`${label} ${bind ? "bind" : "destination"} port must be ${bind ? "0 (automatic) or " : ""}1-65535`);
+    }
+  }
   return getBackend().createLocalForward(payload);
 }
 

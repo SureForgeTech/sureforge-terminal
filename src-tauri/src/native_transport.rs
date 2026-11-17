@@ -1257,20 +1257,28 @@ pub(crate) fn parse_sftp_directory_listing(
                 return None;
             }
 
-            let parts = trimmed.split_whitespace().collect::<Vec<_>>();
-            if parts.len() < 9 {
-                return None;
+            // Read only the eight metadata fields as whitespace-separated tokens.
+            // OpenSSH separates the timestamp and name with one space; everything
+            // after that separator belongs to the name, including whitespace.
+            let mut rest = line.trim_start();
+            let mut parts = Vec::with_capacity(8);
+            for _ in 0..8 {
+                let end = rest.find(char::is_whitespace)?;
+                parts.push(&rest[..end]);
+                rest = &rest[end..];
+                if parts.len() < 8 {
+                    rest = rest.trim_start();
+                }
             }
-
             let mode = parts[0];
-            let raw_name = parts[8..].join(" ");
-            let raw_name = raw_name
-                .split(" -> ")
-                .next()
-                .unwrap_or(&raw_name)
-                .to_string();
-            let name = raw_name.rsplit('/').next().unwrap_or(&raw_name).to_string();
-            if name == "." || name == ".." {
+            let raw_name = &rest[rest.chars().next()?.len_utf8()..];
+            let raw_name = if mode.starts_with('l') {
+                raw_name.split(" -> ").next().unwrap_or(raw_name)
+            } else {
+                raw_name
+            };
+            let name = raw_name.rsplit('/').next().unwrap_or(raw_name).to_string();
+            if name.is_empty() || name == "." || name == ".." {
                 return None;
             }
 
@@ -1285,7 +1293,11 @@ pub(crate) fn parse_sftp_directory_listing(
                 kind: kind.to_string(),
                 modified_at: parse_sftp_modified_at(parts[5], parts[6], parts[7]),
                 name: name.clone(),
-                path: resolve_remote_path(target_path, &name),
+                path: normalize_remote_path(&format!(
+                    "{}/{}",
+                    target_path.trim_end_matches('/'),
+                    name
+                )),
                 permissions: symbolic_permissions_to_octal(mode),
                 size,
             })
@@ -1397,7 +1409,9 @@ pub(crate) fn run_sftp_batch_commands(
         }
 
         write_jump_session_input(&writer, "bye\n")?;
-        Ok(trim_ssh_output(&session_output))
+        // Listing names may end in spaces. Do not apply diagnostic-output
+        // trimming to successful SFTP data before the listing parser sees it.
+        Ok(session_output)
     })();
 
     let _ = child.kill();
@@ -2006,12 +2020,15 @@ pub(crate) fn validate_forward_payload(payload: &CreateForwardPayload) -> Result
         return Err("Forward hostnames are required".to_string());
     }
 
-    if payload.local_port == 0 || payload.remote_port == 0 {
-        return Err("Forward ports must be greater than zero".to_string());
-    }
-
     if payload.direction != "local" && payload.direction != "remote" {
         return Err("Unsupported forward direction".to_string());
+    }
+
+    if payload.direction == "local" && payload.remote_port == 0 {
+        return Err("Remote destination port must be 1-65535".to_string());
+    }
+    if payload.direction == "remote" && payload.local_port == 0 {
+        return Err("Local destination port must be 1-65535".to_string());
     }
 
     Ok(())
@@ -2144,10 +2161,25 @@ pub(crate) fn list_session_forwards(
     }
 }
 
+// OpenSSH supports port 0 for remote listeners only. Select a local port
+// through the OS before requesting its bind; ssh still reports a bind failure
+// if another process claims it between releasing this listener and forwarding.
+fn assign_local_forward_port(request: &mut CreateForwardPayload) -> Result<(), String> {
+    if request.direction == "local" && request.local_port == 0 {
+        let listener = std::net::TcpListener::bind((request.local_host.as_str(), 0))
+            .map_err(|error| format!("Could not select a local-forward port: {error}"))?;
+        request.local_port = listener
+            .local_addr()
+            .map_err(|error| format!("Could not read the local-forward port: {error}"))?
+            .port();
+    }
+    Ok(())
+}
+
 pub(crate) fn create_native_forward(
     native_sessions: &NativeSessionRegistry,
     native_forwards: &NativeForwardRegistry,
-    request: CreateForwardPayload,
+    mut request: CreateForwardPayload,
 ) -> Result<PortForwardRecord, String> {
     validate_forward_payload(&request)?;
     let session = get_native_session(native_sessions, &request.session_id)
@@ -2159,12 +2191,14 @@ pub(crate) fn create_native_forward(
     } else {
         "-L"
     };
-    let forward_output = run_native_ssh_control_command(
-        &context,
-        "forward",
-        forward_flag,
-        &build_forward_spec(&request),
-    );
+    let forward_output = assign_local_forward_port(&mut request).and_then(|()| {
+        run_native_ssh_control_command(
+            &context,
+            "forward",
+            forward_flag,
+            &build_forward_spec(&request),
+        )
+    });
 
     let assigned_remote_port = match forward_output {
         Ok(output) => {
@@ -2173,8 +2207,8 @@ pub(crate) fn create_native_forward(
                 // we cannot report the working forward's real port; surface it
                 // as an error rather than misreporting port 0.
                 match output.trim().parse::<u16>() {
-                    Ok(port) => port,
-                    Err(_) => {
+                    Ok(port) if port != 0 => port,
+                    _ => {
                         let _ = child.kill();
                         let _ = child.wait();
                         drop(master);
@@ -2387,6 +2421,68 @@ pub(crate) fn execute_native_snippet_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn forward_request(direction: &str, local_port: u16, remote_port: u16) -> CreateForwardPayload {
+        CreateForwardPayload {
+            direction: direction.to_string(),
+            local_host: "127.0.0.1".to_string(),
+            remote_host: "127.0.0.1".to_string(),
+            local_port,
+            remote_port,
+            session_id: "test-session".to_string(),
+        }
+    }
+
+    #[test]
+    fn forward_zero_is_allowed_only_on_the_listener() {
+        assert!(validate_forward_payload(&forward_request("local", 0, 65535)).is_ok());
+        assert!(validate_forward_payload(&forward_request("remote", 65535, 0)).is_ok());
+        assert_eq!(
+            validate_forward_payload(&forward_request("local", 1, 0)),
+            Err("Remote destination port must be 1-65535".to_string())
+        );
+        assert_eq!(
+            validate_forward_payload(&forward_request("remote", 0, 1)),
+            Err("Local destination port must be 1-65535".to_string())
+        );
+    }
+
+    #[test]
+    fn automatic_local_forward_port_is_reported_in_the_spec() {
+        let mut request = forward_request("local", 0, 443);
+        assign_local_forward_port(&mut request).unwrap();
+        assert_ne!(request.local_port, 0);
+        assert_eq!(
+            build_forward_spec(&request),
+            format!("127.0.0.1:{}:127.0.0.1:443", request.local_port)
+        );
+        let mut remote = forward_request("remote", 443, 0);
+        assign_local_forward_port(&mut remote).unwrap();
+        assert_eq!(remote.remote_port, 0);
+    }
+
+    #[test]
+    fn sftp_listing_preserves_filename_whitespace() {
+        for name in [
+            "two  spaces.txt",
+            " leading.txt",
+            "trailing.txt  ",
+            "  ",
+            "file -> name",
+            "unicode  café.txt",
+        ] {
+            let output = format!("-rw-r--r-- 1 test test 12 Jan 1 12:00 {name}\n");
+            let entries = parse_sftp_directory_listing("/files", &output);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].name, name);
+            assert_eq!(entries[0].path, format!("/files/{name}"));
+        }
+        let entries = parse_sftp_directory_listing(
+            "/files",
+            "lrwxr-xr-x 1 test test 12 Jan 1 2026 link  name -> target  name\n",
+        );
+        assert_eq!(entries[0].name, "link  name");
+    }
 
     #[test]
     fn sftp_command_failure_reads_the_text_sftp_prints() {

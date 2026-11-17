@@ -54,9 +54,9 @@ export function PortForwardPanel({ sessionId, disabled = false }: PortForwardPan
       await createLocalForward({
         direction,
         localHost,
-        localPort: Number.parseInt(localPort, 10),
+        localPort: Number(localPort.trim() || NaN),
         remoteHost,
-        remotePort: Number.parseInt(remotePort, 10),
+        remotePort: Number(remotePort.trim() || NaN),
         sessionId,
       });
       await loadForwards();
@@ -64,6 +64,16 @@ export function PortForwardPanel({ sessionId, disabled = false }: PortForwardPan
       setErrorMessage(errorMessageFromUnknown(error));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const stopForward = async (id: string) => {
+    try {
+      await deleteLocalForward(id);
+      await loadForwards();
+    } catch (error) {
+      await loadForwards();
+      setErrorMessage(errorMessageFromUnknown(error));
     }
   };
 
@@ -163,7 +173,7 @@ export function PortForwardPanel({ sessionId, disabled = false }: PortForwardPan
               </span>
               <button
                 type="button"
-                onClick={() => void deleteLocalForward(forward.id).then(loadForwards)}
+                onClick={() => void stopForward(forward.id)}
                 className="rounded-lg border border-rose-500/40 px-3 py-1 text-xs text-rose-200 transition hover:border-rose-400 hover:text-white"
               >
                 Stop
