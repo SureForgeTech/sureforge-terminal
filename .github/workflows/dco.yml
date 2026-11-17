@@ -1,8 +1,8 @@
 name: dco
 
 # Outside contributions must carry a Developer Certificate of Origin sign-off
-# (`git commit -s`) on every commit; see CONTRIBUTING.md. Pull requests from the
-# maintainers and from bots are exempt.
+# (`git commit -s`) on every commit; see CONTRIBUTING.md. Pull requests from
+# the maintainers and from bots are exempt.
 
 on:
   pull_request:
@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   sign-off:
-    runs-on: ${{ fromJSON(vars.LINUX_RUNNER_LABELS) }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Check every commit is signed off
@@ -34,9 +34,9 @@ jobs:
           esac
           if [ "$AUTHOR_TYPE" = "Bot" ]; then echo "Bot pull request: sign-off not required."; exit 0; fi
           missing=$(gh api --paginate "repos/$REPO/pulls/$PR/commits" \
-            --jq '.[] | select((.commit.message | test("(?m)^Signed-off-by: .+ <[^>]+>$")) | not) | .sha[0:12]')
+            --jq '.[] | select((.parents | length) == 1) | select((.commit.message | test("(^|\n)Signed-off-by: [^\n]+ <[^>\n]+>(\n|$)")) | not) | .sha[0:12]')
           if [ -n "$missing" ]; then
-            echo "These commits are missing a Signed-off-by line (use git commit -s, then git push --force-with-lease):"
+            echo "These commits are missing a Signed-off-by line (amend them with git commit -s, then force-push the branch with --force-with-lease):"
             echo "$missing"
             exit 1
           fi
