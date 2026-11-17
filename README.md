@@ -132,7 +132,8 @@ More setup and milestone detail lives in [docs/development.md](docs/development.
 ## Contributing
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for setup, the
-local validation gate, and pull-request guidelines. Please report security
+local validation gate, and pull-request guidelines. Pull requests need a
+DCO sign-off (`git commit -s`). Please report security
 issues privately via [SECURITY.md](SECURITY.md) rather than a public issue.
 
 ## License
