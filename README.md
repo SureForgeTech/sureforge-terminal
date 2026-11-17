@@ -137,5 +137,5 @@ issues privately via [SECURITY.md](SECURITY.md) rather than a public issue.
 
 ## License
 
-Licensed under the [Apache License 2.0](LICENSE). Copyright 2026 ABD Enterprises.
+Licensed under the [Apache License 2.0](LICENSE). Copyright 2026 SureForgeTech and contributors.
 See [NOTICE](NOTICE) for attribution.

@@ -1,0 +1,1 @@
+- [INTERNAL] `NOTICE` and the README now name "SureForgeTech and contributors" as the copyright holder; the Apache 2.0 licence text is unchanged.
