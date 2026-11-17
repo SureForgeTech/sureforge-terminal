@@ -1,0 +1,1 @@
+- [INTERNAL] DCO check skips merge commits and uses the same wording and runner as the other public repositories.
