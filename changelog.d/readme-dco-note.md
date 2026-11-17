@@ -1,1 +1,1 @@
-- [DOCS] README Contributing section mentions the DCO sign-off for pull requests.
+- [INTERNAL] README Contributing section mentions the DCO sign-off for pull requests.
