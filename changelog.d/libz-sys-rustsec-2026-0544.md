@@ -1,0 +1,1 @@
+- [SECURITY] Update libz-sys to 1.1.33 for RUSTSEC-2026-0544.
