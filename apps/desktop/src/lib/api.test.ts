@@ -239,3 +239,21 @@ describe("native trust and key tooling API", () => {
     await expect(listRemoteDirectory(hostFixture, "/")).rejects.toThrow(/^upstream timed out$/);
   });
 });
+
+describe("forward port validation before runtime dispatch", () => {
+  beforeEach(() => vi.clearAllMocks());
+  it.each([true, false])("validates ranges consistently (native=%s)", async (native) => {
+    isTauriRuntime.mockReturnValue(native);
+    for (const direction of ["local", "remote"] as const) {
+      const bind = direction === "local" ? "localPort" : "remotePort";
+      const destination = direction === "local" ? "remotePort" : "localPort";
+      const payload = { direction, localHost: "localhost", remoteHost: "localhost", localPort: 22, remotePort: 443, sessionId: "test" };
+      await expect(createLocalForward({ ...payload, [destination]: 0 })).rejects.toThrow("destination port must be 1-65535");
+      for (const value of [-1, 65536, 1.5, NaN]) {
+        await expect(createLocalForward({ ...payload, [bind]: value })).rejects.toThrow("bind port must be 0 (automatic) or 1-65535");
+      }
+    }
+    expect(invokeTauriCommand).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

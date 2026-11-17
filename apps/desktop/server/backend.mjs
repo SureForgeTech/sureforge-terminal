@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { createServer } from "node:http";
 import {
@@ -12,7 +11,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { connect as connectNet, createServer as createNetServer } from "node:net";
+import { createForwardOperations } from "./backend-forwards.mjs";
 import { basename, dirname, join, normalize, posix as posixPath } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -99,6 +98,14 @@ function denyUnauthorized(response, decision) {
 const sessions = new Map();
 const execFileAsync = promisify(execFile);
 const forwards = new Map();
+
+const {
+  serializeForward,
+  closeLocalForward,
+  closeForwardsForSession,
+  createLocalForward,
+  createRemoteForward,
+} = createForwardOperations({ sessions, forwards });
 
 function expandHome(pathname) {
   if (!pathname) {
@@ -278,194 +285,6 @@ const {
   uploadRemoteFile,
   sendRemoteFile,
 } = createSftpOperations({ withSftp });
-
-function serializeForward(forward) {
-  return {
-    id: forward.id,
-    direction: forward.direction,
-    sessionId: forward.sessionId,
-    localHost: forward.localHost,
-    localPort: forward.localPort,
-    remoteHost: forward.remoteHost,
-    remotePort: forward.remotePort,
-    createdAt: forward.createdAt,
-  };
-}
-
-async function closeLocalForward(forwardId) {
-  const forward = forwards.get(forwardId);
-  if (!forward) {
-    return false;
-  }
-
-  if (forward.direction === "local") {
-    await new Promise((resolve, reject) => {
-      forward.server.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-
-        resolve();
-      });
-    });
-  } else {
-    const session = sessions.get(forward.sessionId);
-    if (session) {
-      await new Promise((resolve, reject) => {
-        session.client.unforwardIn(forward.remoteHost, forward.remotePort, (error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-
-          resolve();
-        });
-      });
-    }
-  }
-
-  forwards.delete(forwardId);
-  return true;
-}
-
-async function closeForwardsForSession(sessionId) {
-  const forwardIds = Array.from(forwards.values())
-    .filter((forward) => forward.sessionId === sessionId)
-    .map((forward) => forward.id);
-
-  await Promise.all(
-    forwardIds.map((forwardId) => closeLocalForward(forwardId).catch(() => false))
-  );
-}
-
-async function createLocalForward({ localHost, localPort, remoteHost, remotePort, sessionId }) {
-  const session = sessions.get(sessionId);
-  if (!session) {
-    throw new Error("Session not found");
-  }
-
-  const server = createNetServer((socket) => {
-    session.client.forwardOut(
-      socket.remoteAddress ?? "127.0.0.1",
-      socket.remotePort ?? 0,
-      remoteHost,
-      remotePort,
-      (error, upstream) => {
-        if (error) {
-          socket.destroy(error);
-          return;
-        }
-
-        socket.pipe(upstream);
-        upstream.pipe(socket);
-        upstream.on("error", () => socket.destroy());
-        socket.on("error", () => upstream.end());
-      }
-    );
-  });
-
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(localPort, localHost, () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-
-  const address = server.address();
-  const boundPort = typeof address === "object" && address ? address.port : localPort;
-  const forward = {
-    id: randomUUID(),
-    direction: "local",
-    sessionId,
-    localHost,
-    localPort: boundPort,
-    remoteHost,
-    remotePort,
-    createdAt: new Date().toISOString(),
-    server,
-  };
-
-  forwards.set(forward.id, forward);
-  return serializeForward(forward);
-}
-
-async function createRemoteForward({ localHost, localPort, remoteHost, remotePort, sessionId }) {
-  const session = sessions.get(sessionId);
-  if (!session) {
-    throw new Error("Session not found");
-  }
-
-  const forward = {
-    id: randomUUID(),
-    direction: "remote",
-    sessionId,
-    localHost,
-    localPort,
-    remoteHost,
-    remotePort,
-    createdAt: new Date().toISOString(),
-    onConnection: null,
-  };
-
-  forward.onConnection = (accept) => {
-    const upstream = accept();
-    const localSocket = connectNet(forward.localPort, forward.localHost);
-
-    upstream.pipe(localSocket);
-    localSocket.pipe(upstream);
-    upstream.on("error", () => localSocket.destroy());
-    localSocket.on("error", () => upstream.destroy());
-  };
-
-  ensureRemoteForwardDispatcher(session);
-
-  await new Promise((resolve, reject) => {
-    session.client.forwardIn(remoteHost, remotePort, (error, boundPort) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-
-      // Registered here, not after the await: a connection the server sends
-      // right behind its bind reply must already find this forward.
-      forward.remotePort = boundPort ?? remotePort;
-      forwards.set(forward.id, forward);
-      resolve();
-    });
-  });
-
-  return serializeForward(forward);
-}
-
-/**
- * One "tcp connection" listener per session, which hands each incoming
- * connection to the remote forward it belongs to. Each forward used to add
- * its own listener that rejected connections for any other port; ssh2 tears
- * a channel down on reject() even after another listener accepted it, so
- * with two remote forwards on one session neither carried traffic.
- */
-function ensureRemoteForwardDispatcher(session) {
-  if (session.remoteForwardDispatcher) {
-    return;
-  }
-  session.remoteForwardDispatcher = (details, accept, reject) => {
-    const forward = Array.from(forwards.values()).find(
-      (candidate) =>
-        candidate.direction === "remote" &&
-        candidate.sessionId === session.id &&
-        candidate.remoteHost === details.destIP &&
-        candidate.remotePort === details.destPort
-    );
-    if (!forward) {
-      reject();
-      return;
-    }
-    forward.onConnection(accept);
-  };
-  session.client.on("tcp connection", session.remoteForwardDispatcher);
-}
 
 async function inspectKey(pathname) {
   const resolvedPath = expandHome(pathname);

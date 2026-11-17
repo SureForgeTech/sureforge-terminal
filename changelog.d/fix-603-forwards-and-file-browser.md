@@ -1,0 +1,4 @@
+- [FIX] Stop browser local forwards with active connections and show stop errors in Tunnels. (#603)
+- [FIX] Support automatic listener ports in both runtimes and reject invalid destination ports. (#603)
+- [FIX] Keep file actions from reloading a folder after navigating away. (#603)
+- [FIX] Preserve consecutive and boundary spaces in native SFTP file names. (#603)
