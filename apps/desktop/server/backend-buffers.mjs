@@ -198,7 +198,15 @@ export function bufferPendingInput(
   if (!data) {
     return;
   }
+  // Once something has been dropped, the sequence is broken: what is left is
+  // a prefix of a command line, and appending the next chunk to it would
+  // produce a DIFFERENT command. So everything after the first drop is
+  // dropped too.
   const bytes = Buffer.byteLength(data, "utf8");
+  if (session.pendingInputDroppedBytes > 0) {
+    session.pendingInputDroppedBytes += bytes;
+    return;
+  }
   if (
     session.pendingInputBytes + bytes <= maxBytes &&
     session.pendingInput.length < maxChunks

@@ -36,15 +36,6 @@ import { SSH_FAILURE_CODES } from "./backend-failure-codes.mjs";
 export { SSH_FAILURE_CODES, SSH_FAILURE_CODE_VALUES } from "./backend-failure-codes.mjs";
 
 /**
- * The failure codes the frontend classifier knows.
- *
- * Defined in `backend-failure-codes.mjs` and re-exported here: see that file
- * for why they live apart, and for the names themselves. `internal` is the
- * classifier's catch-all and is deliberately NOT a category it acts on: it
- * falls back to the prose rules.
- */
-
-/**
  * A connection that failed for a reason the user can act on.
  *
  * It carries the code the renderer branches on and a message built from fixed
@@ -162,6 +153,7 @@ export function sshConnectFailureMessage(code, label) {
       return `Could not open an SSH session with ${label}.`;
   }
 }
+
 /**
  * Turn a failed connection into the error the client is told about.
  *

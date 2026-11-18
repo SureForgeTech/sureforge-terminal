@@ -269,6 +269,26 @@ describe("backend ssh session lifecycle", () => {
     expect(session.pendingInputBytes).toBeLessThanOrEqual(64 * 1024);
   });
 
+  it("drops everything after the first thing it had to drop", async () => {
+    // What is left after a drop is a PREFIX of a command line. Appending the
+    // next chunk to it would produce a different command, so nothing after
+    // the first drop is kept.
+    const { bufferPendingInput } = await import("./backend-buffers.mjs");
+    const session = {
+      pendingInput: [] as string[],
+      pendingInputBytes: 0,
+      pendingInputDroppedBytes: 0,
+    };
+
+    bufferPendingInput(session, "ééééééé", 11);
+    expect(session.pendingInput.join("")).toBe("ééééé");
+    expect(session.pendingInputDroppedBytes).toBeGreaterThan(0);
+
+    bufferPendingInput(session, "\r", 11);
+    expect(session.pendingInput.join("")).toBe("ééééé");
+    expect(session.pendingInputDroppedBytes).toBeGreaterThan(0);
+  });
+
   it("reports the input it had to drop, rather than losing it quietly", async () => {
     // The output buffer says how much output it dropped; the input buffer
     // says the same about what was typed.

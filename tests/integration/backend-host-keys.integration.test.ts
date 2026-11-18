@@ -810,6 +810,10 @@ describe("backend SSH host-key trust", () => {
       expect(message).not.toContain("known_hosts");
       // The detail is still on the server.
       expect(String(verifier.failure.error?.cause)).toContain("malformed");
+      // The category is "internal", not "host_key_mismatch": the key did not
+      // change, the store could not be read. A store that another process
+      // holds for a moment should be tried again; a changed key must not be.
+      expect(verifier.failure.error?.code).toBe("internal");
     });
 
     it("keeps terminal control characters out of the message", async () => {

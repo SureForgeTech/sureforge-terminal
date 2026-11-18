@@ -382,6 +382,10 @@ describe("a failed connection is reported with a code and a reason", () => {
     const source = await readFile("apps/desktop/server/backend.mjs", "utf8");
 
     expect(source).toContain("relayableFailureCode(error)");
+    // Both the live broadcast and the replay of a failure to a websocket
+    // that attaches later go through the same frame builder, so neither can
+    // lose the category.
+    expect(source.match(/sessionFailureFrame\(session\)/g)?.length).toBe(2);
   });
 
   it("classifies the ssh2 failures into the categories the client knows", async () => {
