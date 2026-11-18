@@ -36,6 +36,7 @@ vi.mock("./demo-backend", () => ({
 }));
 
 import { generatePrivateKey, getProtocolRuntimeStatus, inspectPrivateKey, scanKnownHost } from "./api";
+import { classifySshError } from "./ssh-error-classifier";
 import {
   createLocalForward,
   executeSnippetOnHosts,
@@ -237,6 +238,41 @@ describe("native trust and key tooling API", () => {
     fetchMock.mockResolvedValue(new Response("upstream timed out", { status: 502 }));
 
     await expect(listRemoteDirectory(hostFixture, "/")).rejects.toThrow(/^upstream timed out$/);
+  });
+
+  it("carries the failure category beside the message, so a refused sign-in is not retried", async () => {
+    // The backend sends the category with the message, the way the native
+    // shell sends it. Without it the classifier reads the fixed message, finds
+    // no rule for it, and reports an unknown failure — which IS retried, and a
+    // refused sign-in must not be.
+    isTauriRuntime.mockReturnValue(false);
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: "gateway.internal:22 refused the sign-in. Check the username.",
+          code: "auth_failed",
+        }),
+        { headers: { "Content-Type": "application/json" }, status: 502 }
+      )
+    );
+
+    const failure = await listRemoteDirectory(hostFixture, "/").catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error & { code?: string }).code).toBe("auth_failed");
+    expect(classifySshError(failure).category).toBe("auth_failed");
+  });
+
+  it("ignores a category it does not know", async () => {
+    isTauriRuntime.mockReturnValue(false);
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({ error: "Something failed.", code: "made-up" }),
+        { headers: { "Content-Type": "application/json" }, status: 500 }
+      )
+    );
+
+    const failure = await listRemoteDirectory(hostFixture, "/").catch((error: unknown) => error);
+    expect((failure as Error & { code?: string }).code).toBeUndefined();
   });
 });
 

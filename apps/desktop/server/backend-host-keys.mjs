@@ -138,8 +138,11 @@ export function knownHostsHostPattern(hostname, port) {
  * The refusal message reaches a terminal, which interprets escape sequences.
  * A hostname carrying one could forge terminal output on top of the real
  * error, so control characters are dropped before the message is built.
+ *
+ * Exported because the connection-failure messages need the same guarantee:
+ * they reach the same terminal by the same route.
  */
-function safeHostLabel(hostname, port) {
+export function safeHostLabel(hostname, port) {
   // Drop the C0 control characters, DEL, and the C1 range (0x80-0x9F).
   // Written out rather than matched with a regular expression so the intent
   // is readable and the lint rule about control characters in patterns does

@@ -148,6 +148,124 @@ describe("#230: respondError does not relay internal error text", () => {
   });
 });
 
+describe("a failed connection is reported with a code and a reason", () => {
+  it("relays the reason and the category, and nothing of the underlying error", async () => {
+    // Every SSH failure reached the client as "Internal server error.", which
+    // names no cause. The reason a host could not be reached is the reason
+    // the user has to act on, so the backend sends it — built from fixed text
+    // and the host label — beside the category the client branches on. The
+    // underlying ssh2 error stays on the server.
+    const { SshConnectError, SSH_FAILURE_CODES } = await import(
+      "../../apps/desktop/server/backend-ssh-failure.mjs"
+    );
+    const sentinel = "TS_SSH_CONNECT_PROBE_2b7e91";
+    const response = recordingResponse();
+
+    respondError(
+      response,
+      new SshConnectError("gateway.internal:22 refused the sign-in. Check the username.", {
+        code: SSH_FAILURE_CODES.authFailed,
+        cause: new Error(`All configured authentication methods failed ${sentinel}`),
+      }),
+    );
+
+    expect(response.recorded.status).toBe(502);
+    expect(JSON.parse(response.recorded.body!)).toEqual({
+      error: "gateway.internal:22 refused the sign-in. Check the username.",
+      code: "auth_failed",
+    });
+    // The underlying error text is still not relayed.
+    expect(response.recorded.body).not.toContain(sentinel);
+  });
+
+  it("refuses to relay a look-alike that is not a connection failure", async () => {
+    const { SSH_FAILURE_CODES } = await import(
+      "../../apps/desktop/server/backend-ssh-failure.mjs"
+    );
+    const sentinel = "TS_SSH_CONNECT_LOOKALIKE_PROBE_5c1a44";
+    const impostor = Object.assign(new Error(`refused the sign-in ${sentinel}`), {
+      statusCode: 502,
+      code: SSH_FAILURE_CODES.authFailed,
+    });
+    const response = recordingResponse();
+
+    respondError(response, impostor);
+
+    expect(response.recorded.body).not.toContain(sentinel);
+    expect(JSON.parse(response.recorded.body!)).toEqual({ error: "Internal server error." });
+  });
+
+  it("classifies the ssh2 failures into the categories the client knows", async () => {
+    const { sshConnectFailure, SSH_FAILURE_CODES } = await import(
+      "../../apps/desktop/server/backend-ssh-failure.mjs"
+    );
+    const host = { hostname: "gateway.internal", port: 22 };
+
+    const refused = sshConnectFailure(
+      Object.assign(new Error("connect ECONNREFUSED 10.0.0.1:22"), {
+        level: "client-socket",
+        code: "ECONNREFUSED",
+      }),
+      host,
+    );
+    expect(refused.code).toBe(SSH_FAILURE_CODES.refused);
+
+    const dns = sshConnectFailure(
+      Object.assign(new Error("Error while looking up IPv4 address"), { level: "client-dns" }),
+      host,
+    );
+    expect(dns.code).toBe(SSH_FAILURE_CODES.dnsFailure);
+
+    const auth = sshConnectFailure(
+      Object.assign(new Error("All configured authentication methods failed"), {
+        level: "client-authentication",
+      }),
+      host,
+    );
+    expect(auth.code).toBe(SSH_FAILURE_CODES.authFailed);
+
+    const timeout = sshConnectFailure(
+      Object.assign(new Error("Timed out while waiting for handshake"), { level: "client-timeout" }),
+      host,
+    );
+    expect(timeout.code).toBe(SSH_FAILURE_CODES.timeout);
+  });
+
+  it("keeps a refused sign-in out of the retry path", async () => {
+    // A refused sign-in must not be retried: repeated failed logins can lock
+    // the account. The client's classifier reads the code, so the category
+    // survives the fixed message.
+    const { sshConnectFailure, SSH_FAILURE_CODES } = await import(
+      "../../apps/desktop/server/backend-ssh-failure.mjs"
+    );
+    const { classifySshError } = await import(
+      "../../apps/desktop/src/lib/ssh-error-classifier"
+    );
+    const { shouldScheduleReconnect } = await import(
+      "../../apps/desktop/src/components/terminal/connect-failure-policy"
+    );
+
+    const failure = sshConnectFailure(
+      Object.assign(new Error("All configured authentication methods failed"), {
+        level: "client-authentication",
+      }),
+      { hostname: "gateway.internal", port: 22 },
+    );
+    expect(failure.code).toBe(SSH_FAILURE_CODES.authFailed);
+
+    const classified = classifySshError(
+      Object.assign(new Error(failure.message), { code: failure.code }),
+    );
+    expect(classified.category).toBe("auth_failed");
+    expect(
+      shouldScheduleReconnect(classified.category, {
+        connectedOnce: true,
+        reconnectOnRestore: true,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("#230: the surrounding contract is unchanged", () => {
   it("leaves the WebSocket failSession diagnostics carrying the real message", async () => {
     // Sanitizing getErrorMessage would have been the easy fix and would have

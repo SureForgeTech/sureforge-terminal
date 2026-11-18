@@ -8,8 +8,14 @@ import {
 import { requestAuthContext, sshAuthOptions } from "./backend-ssh-auth.mjs";
 import { waitForSshReady } from "./backend-command-operations.mjs";
 import { SecretBuffer } from "./secrets.mjs";
-import { selectHostKeyVerifier } from "./backend-host-keys.mjs";
+import { selectHostKeyVerifier, safeHostLabel } from "./backend-host-keys.mjs";
 import { assertHostRequestIsAllowed } from "./backend-host-validation.mjs";
+import { bufferPendingInput } from "./backend-buffers.mjs";
+import {
+  SSH_FAILURE_CODES,
+  SshConnectError,
+  sshConnectFailure,
+} from "./backend-ssh-failure.mjs";
 
 /**
  * How long a session that ended before its shell opened stays in the session
@@ -19,6 +25,33 @@ import { assertHostRequestIsAllowed } from "./backend-host-validation.mjs";
  */
 export const FAILED_SESSION_RETENTION_MS = 60_000;
 
+/**
+ * How long a session that authenticated successfully waits for its shell.
+ *
+ * ssh2's `readyTimeout` bounds the handshake only, and it is cleared once the
+ * sign-in succeeds. A server that authenticates and then never answers the
+ * channel open left the session in "connecting" for ever: no error, no
+ * timeout, and the connection held open. The native shell opens the shell as
+ * part of the connect, so it never had this window; the browser backend
+ * returns the session id first and opens the shell afterwards.
+ *
+ * 30s is the same budget the backend already allows an SFTP control
+ * operation (SFTP_CONTROL_TIMEOUT_MS), so the two paths time out on the same
+ * scale.
+ */
+export const SHELL_OPEN_TIMEOUT_MS = 30_000;
+
+/**
+ * How long a jump host has to open the tunnel to the target host.
+ *
+ * The tunnel request is a channel open on an established connection, and
+ * ssh2 does not bound it. A bastion that accepts the sign-in and then never
+ * answers left an authenticated connection open for the life of the backend
+ * process, which is the same class of leak the deadline in
+ * backend-deadline.mjs exists to close.
+ */
+export const JUMP_FORWARD_TIMEOUT_MS = 30_000;
+
 export function createSshSessionManager({
   sessions,
   getHostKeyStore,
@@ -27,6 +60,8 @@ export function createSshSessionManager({
   failSession,
   expandHome,
   failedSessionRetentionMs = FAILED_SESSION_RETENTION_MS,
+  shellOpenTimeoutMs = SHELL_OPEN_TIMEOUT_MS,
+  jumpForwardTimeoutMs = JUMP_FORWARD_TIMEOUT_MS,
 }) {
   /**
    * Remove a session and release everything it holds. Safe to call more than
@@ -37,6 +72,10 @@ export function createSshSessionManager({
     if (session.retireTimer) {
       clearTimeout(session.retireTimer);
       session.retireTimer = null;
+    }
+    if (session.shellTimer) {
+      clearTimeout(session.shellTimer);
+      session.shellTimer = null;
     }
     try {
       await closeForwardsForSession(session.id);
@@ -159,7 +198,23 @@ export function createSshSessionManager({
 
     try {
       const socket = await new Promise((resolve, reject) => {
+        // ssh2 does not bound a channel open, so a bastion that accepts the
+        // sign-in and then never answers the tunnel request left an
+        // authenticated connection open for the life of the backend process.
+        // Bound the wait, and release the connection when it expires.
+        const timer = setTimeout(() => {
+          reject(
+            new SshConnectError(
+              `The jump host did not open a tunnel to ${safeHostLabel(host.hostname, host.port)} ` +
+                `within ${Math.round(jumpForwardTimeoutMs / 1000)} seconds.`,
+              { code: SSH_FAILURE_CODES.timeout }
+            )
+          );
+        }, jumpForwardTimeoutMs);
+        timer.unref?.();
+
         jumpClient.forwardOut("127.0.0.1", 0, host.hostname, host.port, (error, stream) => {
+          clearTimeout(timer);
           if (error) {
             reject(error);
             return;
@@ -181,13 +236,18 @@ export function createSshSessionManager({
     const client = new Client();
     const { config: connectConfig, scrub, hostKeyFailure } = await createConnectConfig(host);
     setStage?.("connect");
-    const jumpConnection = host.jumpHost ? await openJumpSocket(host, setStage) : undefined;
-
-    if (jumpConnection?.socket) {
-      connectConfig.sock = jumpConnection.socket;
-    }
-
     try {
+      // Inside the try, so a jump host that refuses to connect still scrubs
+      // the credentials this connection was built with. The jump connection
+      // uses its own credentials; these belong to the host being reached
+      // through it, and they were on the heap for as long as the attempt
+      // took.
+      const jumpConnection = host.jumpHost ? await openJumpSocket(host, setStage) : undefined;
+
+      if (jumpConnection?.socket) {
+        connectConfig.sock = jumpConnection.socket;
+      }
+
       return await waitForSshReady(
         client,
         connectConfig,
@@ -195,12 +255,19 @@ export function createSshSessionManager({
         setStage
       );
     } catch (error) {
+      // The client never became usable, and nothing else would close it: the
+      // short-lived path (an SFTP operation, a forward, a remote command)
+      // threw away the client it built. End it here so a refused or
+      // unreachable host does not leave a connection behind.
+      client.end();
       // A refused host key is reported with the reason, not ssh2's bare
       // "Host denied (verification failed)".
       if (hostKeyFailure.error) {
         throw hostKeyFailure.error;
       }
-      throw error;
+      // Every other connection failure is reported with a code and a message
+      // the user can act on, instead of "Internal server error.".
+      throw sshConnectFailure(error, host);
     } finally {
       // Whether the SSH handshake succeeded or failed, ssh2 has already read
       // password / passphrase / private-key bytes off connectConfig (the
@@ -224,12 +291,21 @@ export function createSshSessionManager({
       buffer: [],
       bufferBytes: 0,
       droppedBytes: 0,
+      // Input typed before the shell opened, and the window size that came
+      // with it. The session id reaches the client before the shell exists,
+      // so both can arrive before there is a stream to apply them to.
+      pendingInput: [],
+      pendingInputBytes: 0,
+      pendingInputDroppedBytes: 0,
+      pendingResize: null,
       // Set when the session fails, and replayed to a websocket that attaches
       // after the failure. See failSession.
       failureMessage: null,
       // Set while a session that ended before its shell opened waits to be
       // removed. See FAILED_SESSION_RETENTION_MS.
       retireTimer: null,
+      // Set while the session waits for its shell. See SHELL_OPEN_TIMEOUT_MS.
+      shellTimer: null,
     };
     // M05 / #87: connectClient (the short-lived path) properly destructures
     // both fields and runs scrub() in finally. createSshSession (the
@@ -240,103 +316,145 @@ export function createSshSessionManager({
     // contract documented in connectClient's finally block).
     const { config: connectConfig, scrub: scrubConfig, hostKeyFailure } =
       await createConnectConfig(host);
-    const jumpConnection = host.jumpHost ? await openJumpSocket(host) : undefined;
 
-    if (jumpConnection?.socket) {
-      connectConfig.sock = jumpConnection.socket;
-      session.jumpClient = jumpConnection.jumpClient;
-    }
+    try {
+      const jumpConnection = host.jumpHost ? await openJumpSocket(host) : undefined;
 
-    session.client.on("ready", () => {
-      const shellWindow = {
-        term: "xterm-256color",
-        cols: 120,
-        rows: 36,
-      };
-      const shellEnvironment = getChannelEnvironment(host.environment);
-      const interactiveShellCommand = buildInteractiveShellCommand(host.environment);
-      const onShellReady = (error, stream) => {
-        if (error) {
-          failSession(session, error);
-          // Nothing can be done with a connection whose shell was refused.
-          // Ending it lets the client's close handler retire the session
-          // (it used to stay open, with its session, indefinitely).
+      if (jumpConnection?.socket) {
+        connectConfig.sock = jumpConnection.socket;
+        session.jumpClient = jumpConnection.jumpClient;
+      }
+
+      session.client.on("ready", () => {
+        const shellWindow = {
+          term: "xterm-256color",
+          cols: 120,
+          rows: 36,
+        };
+        const shellEnvironment = getChannelEnvironment(host.environment);
+        const interactiveShellCommand = buildInteractiveShellCommand(host.environment);
+
+        // ssh2's readyTimeout covers the handshake and is cleared once the
+        // sign-in succeeds, so nothing bounded the wait for the shell. A
+        // server that authenticates and then never answers the channel open
+        // left the session in "connecting" for ever, with the connection
+        // held open. Bound it here so the session fails with a reason.
+        session.shellTimer = setTimeout(() => {
+          session.shellTimer = null;
+          failSession(
+            session,
+            new Error(
+              `The host did not open a shell within ${Math.round(shellOpenTimeoutMs / 1000)} seconds.`
+            )
+          );
           session.client.end();
-          return;
-        }
+        }, shellOpenTimeoutMs);
+        session.shellTimer.unref?.();
 
-        session.stream = stream;
-        session.state = "connected";
-        broadcast(session, {
-          type: "status",
-          state: "connected",
-        });
+        const onShellReady = (error, stream) => {
+          if (session.shellTimer) {
+            clearTimeout(session.shellTimer);
+            session.shellTimer = null;
+          }
+          if (error) {
+            failSession(session, error);
+            // Nothing can be done with a connection whose shell was refused.
+            // Ending it lets the client's close handler retire the session
+            // (it used to stay open, with its session, indefinitely).
+            session.client.end();
+            return;
+          }
 
-        stream.on("data", (chunk) => {
+          session.stream = stream;
+          session.state = "connected";
           broadcast(session, {
-            type: "data",
-            data: chunk.toString("utf8"),
+            type: "status",
+            state: "connected",
           });
-        });
 
-        stream.on("close", async () => {
-          // M09 / #91: closeForwardsForSession used to run concurrently
-          // with sessions.delete(session.id), which let forward
-          // onConnection handlers reference a deleted sessionId and
-          // error out. Await the forward cleanup BEFORE removing the
-          // session from the map. The client.end() + jumpClient.end()
-          // calls are idempotent; they can run regardless of state.
+          stream.on("data", (chunk) => {
+            broadcast(session, {
+              type: "data",
+              data: chunk.toString("utf8"),
+            });
+          });
+
+          // A write to a stream the server has closed raises an error on the
+          // stream. With no listener, that error is an uncaught exception:
+          // the backend logged it and carried on, the session stayed
+          // "connected", and the keystrokes the user typed vanished with
+          // nothing on screen to say why.
+          stream.on("error", (error) => {
+            failSession(session, error);
+          });
+
+          stream.on("close", async () => {
+            // M09 / #91: closeForwardsForSession used to run concurrently
+            // with sessions.delete(session.id), which let forward
+            // onConnection handlers reference a deleted sessionId and
+            // error out. Await the forward cleanup BEFORE removing the
+            // session from the map. The client.end() + jumpClient.end()
+            // calls are idempotent; they can run regardless of state.
+            session.state = "disconnected";
+            broadcast(session, {
+              type: "status",
+              state: "disconnected",
+            });
+            await retireSession(session);
+          });
+
+          // The window size that arrived before the shell existed, then
+          // everything typed before it — in the order it was typed.
+          if (session.pendingResize) {
+            applySessionResize(session, session.pendingResize.rows, session.pendingResize.cols);
+            session.pendingResize = null;
+          }
+          flushPendingInput(session);
+        };
+
+        if (interactiveShellCommand) {
+          session.client.exec(
+            interactiveShellCommand,
+            shellEnvironment ? { env: shellEnvironment, pty: shellWindow } : { pty: shellWindow },
+            onShellReady
+          );
+        } else if (shellEnvironment) {
+          session.client.shell(shellWindow, { env: shellEnvironment }, onShellReady);
+        } else {
+          session.client.shell(shellWindow, onShellReady);
+        }
+      });
+
+      session.client.on("error", (error) => {
+        session.jumpClient?.end();
+        // A refused host key is reported with the reason, not ssh2's bare
+        // "Host denied (verification failed)". Every other failure is
+        // reported with a code and a message the user can act on.
+        failSession(session, hostKeyFailure.error ?? sshConnectFailure(error, host));
+      });
+
+      session.client.on("close", () => {
+        if (session.state !== "disconnected") {
           session.state = "disconnected";
           broadcast(session, {
             type: "status",
             state: "disconnected",
           });
-          await retireSession(session);
-        });
-      };
-
-      if (interactiveShellCommand) {
-        session.client.exec(
-          interactiveShellCommand,
-          shellEnvironment ? { env: shellEnvironment, pty: shellWindow } : { pty: shellWindow },
-          onShellReady
-        );
-      } else if (shellEnvironment) {
-        session.client.shell(shellWindow, { env: shellEnvironment }, onShellReady);
-      } else {
-        session.client.shell(shellWindow, onShellReady);
-      }
-    });
-
-    session.client.on("error", (error) => {
-      session.jumpClient?.end();
-      // A refused host key is reported with the reason, not ssh2's bare
-      // "Host denied (verification failed)".
-      failSession(session, hostKeyFailure.error ?? error);
-    });
-
-    session.client.on("close", () => {
-      if (session.state !== "disconnected") {
-        session.state = "disconnected";
-        broadcast(session, {
-          type: "status",
-          state: "disconnected",
-        });
-      }
-      if (session.stream) {
-        // The shell's own close handler retires the session.
-        void closeForwardsForSession(session.id);
+        }
+        if (session.stream) {
+          // The shell's own close handler retires the session.
+          void closeForwardsForSession(session.id);
+          session.jumpClient?.end();
+          return;
+        }
+        // The connection ended before a shell opened (a refused login, an
+        // unreachable host, a rejected host key). Nothing else would ever
+        // remove it, so keep it only long enough to report the failure to a
+        // websocket that has not attached yet. The jump connection has nothing
+        // left to carry, so it ends now rather than at removal.
         session.jumpClient?.end();
-        return;
-      }
-      // The connection ended before a shell opened (a refused login, an
-      // unreachable host, a rejected host key). Nothing else would ever
-      // remove it, so keep it only long enough to report the failure to a
-      // websocket that has not attached yet. The jump connection has nothing
-      // left to carry, so it ends now rather than at removal.
-      session.jumpClient?.end();
-      if (!session.retireTimer && sessions.get(session.id) === session) {
-        session.retireTimer = setTimeout(() => {
+        if (!session.retireTimer && sessions.get(session.id) === session) {
+          session.retireTimer = setTimeout(() => {
           session.retireTimer = null;
           void retireSession(session);
         }, failedSessionRetentionMs);
@@ -352,15 +470,75 @@ export function createSshSessionManager({
       // copies so they do not sit on the heap for the session lifetime.
       scrubConfig();
     }
-    sessions.set(session.id, session);
-    return session;
+      sessions.set(session.id, session);
+      return session;
+    } catch (error) {
+      // The session never reached the session map, so nothing else would ever
+      // release what it took: the jump connection, the client, and the
+      // credentials it was built with. The jump client in particular stayed
+      // authenticated to the bastion for the life of the backend process.
+      if (session.shellTimer) {
+        clearTimeout(session.shellTimer);
+        session.shellTimer = null;
+      }
+      scrubConfig();
+      session.jumpClient?.end();
+      session.client.end();
+      throw sshConnectFailure(error, host);
+    }
   }
 
-  return {
-    createConnectConfig,
+  return {    createConnectConfig,
     openJumpSocket,
     connectClient,
     createSshSession,
     retireSession,
   };
+}
+
+/**
+ * Send input to the session's shell.
+ *
+ * The session id is returned to the client as soon as the connection is
+ * established, which is before the shell exists, so the first keystrokes can
+ * arrive before there is a stream to write them to. Dropping them loses what
+ * the user typed; holding them until the shell opens does not.
+ */
+export function writeSessionInput(session, data) {
+  if (session.stream) {
+    session.stream.write(data);
+    return;
+  }
+  bufferPendingInput(session, data);
+}
+
+/**
+ * Write out everything typed before the shell opened, in the order it was
+ * typed.
+ */
+export function flushPendingInput(session) {
+  if (!session.stream || session.pendingInput.length === 0) {
+    return;
+  }
+  const pending = session.pendingInput;
+  session.pendingInput = [];
+  session.pendingInputBytes = 0;
+  for (const chunk of pending) {
+    session.stream.write(chunk);
+  }
+}
+
+/**
+ * Apply a terminal size to the session's shell.
+ *
+ * A size that arrives before the shell exists is held, and applied when the
+ * shell opens: otherwise the session ran at the default 120x36 until the
+ * client happened to send another resize.
+ */
+export function applySessionResize(session, rows, cols) {
+  if (session.stream) {
+    session.stream.setWindow(rows, cols, rows * 16, cols * 8);
+    return;
+  }
+  session.pendingResize = { rows, cols };
 }

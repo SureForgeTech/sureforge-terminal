@@ -421,6 +421,18 @@ describe("parseSessionFrame", () => {
     expect(frame).toEqual({ type: "data", data: "ok" });
   });
 
+  it("keeps the failure category an error frame carries, and ignores one it does not know", () => {
+    // The category is what tells the retry policy that a refused sign-in must
+    // not be retried. A category this app does not know is dropped, so a
+    // backend cannot steer the retry policy with a code of its own.
+    expect(
+      parseSessionFrame(JSON.stringify({ type: "error", message: "boom", code: "auth_failed" }))
+    ).toEqual({ type: "error", message: "boom", code: "auth_failed" });
+    expect(
+      parseSessionFrame(JSON.stringify({ type: "error", message: "boom", code: "made-up" }))
+    ).toEqual({ type: "error", message: "boom" });
+  });
+
   it("returns null for a malformed JSON frame instead of throwing", () => {
     expect(() => parseSessionFrame("{not json")).not.toThrow();
     expect(parseSessionFrame("{not json")).toBeNull();

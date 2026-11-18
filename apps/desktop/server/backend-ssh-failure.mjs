@@ -1,0 +1,170 @@
+// The reason an SSH connection failed, in the shape the renderer can act on.
+//
+// The native shell answers a failed command with a typed `{ code, message }`
+// (src-tauri/src/ipc_error.rs), and the frontend classifier reads that code
+// first and falls back to its prose rules
+// (apps/desktop/src/lib/ssh-error-classifier.ts). The browser backend answered
+// with a bare string, so `respondError` rebuilt every SSH failure as
+// "Internal server error." — the one message that names no cause, and that
+// the classifier cannot categorise.
+//
+// The codes are the SAME names the classifier already uses. That matters for
+// more than the wording: the renderer's retry policy (#373) must not retry a
+// refused sign-in, because repeated failed logins can lock the account. A
+// typed code keeps that decision on the same footing as the native shell.
+//
+// The message is built from fixed text and the host label only. #230 denies
+// relaying an arbitrary error message, so the underlying ssh2 error stays on
+// the server as the error's `cause` and is never sent to a client.
+
+import { HostKeyRejectedError, safeHostLabel } from "./backend-host-keys.mjs";
+import { InvalidHostError } from "./backend-host-validation.mjs";
+import { SshAuthRefusedError } from "./backend-ssh-auth.mjs";
+import { OperationTimeoutError } from "./backend-deadline.mjs";
+
+/**
+ * The failure codes the frontend classifier knows.
+ *
+ * These are the names `apps/desktop/src/lib/ssh-error-classifier.ts` accepts
+ * and the ones `src-tauri/src/ipc_error.rs` serialises, so a browser-mode
+ * failure and a native-mode failure of the same kind are categorised the same
+ * way. `internal` is the classifier's catch-all and is deliberately NOT a
+ * category it acts on: it falls back to the prose rules.
+ */
+export const SSH_FAILURE_CODES = Object.freeze({
+  authFailed: "auth_failed",
+  hostKeyMismatch: "host_key_mismatch",
+  networkUnreachable: "network_unreachable",
+  timeout: "timeout",
+  refused: "refused",
+  dnsFailure: "dns_failure",
+  internal: "internal",
+});
+
+/**
+ * A connection that failed for a reason the user can act on.
+ *
+ * It carries the code the renderer branches on and a message built from fixed
+ * text, so `respondError` can relay both without relaying arbitrary error
+ * text.
+ */
+export class SshConnectError extends Error {
+  constructor(message, { code = SSH_FAILURE_CODES.internal, cause, level } = {}) {
+    super(message, { cause });
+    this.name = "SshConnectError";
+    this.code = code;
+    // 502: the request was well formed and the SSH server — or the network in
+    // front of it — failed to answer. A retry can succeed once the host or
+    // the network recovers.
+    this.statusCode = 502;
+    // ssh2 tags its errors with a level, and the failure-stage mapping keys
+    // off it (see sshFailureStage). Keeping the original level means a
+    // wrapped error is still classified as the same stage it always was, so
+    // the command path keeps reporting the stage it reported before.
+    if (level) {
+      this.level = level;
+    }
+  }
+}
+
+/**
+ * The code for an ssh2 (or socket) failure.
+ *
+ * The levels are the ones ssh2 assigns in lib/client.js: `client-dns` for a
+ * lookup that failed, `client-socket` for a socket error, `client-timeout`
+ * for its own connect timeout, and `client-authentication` for a refused
+ * sign-in. A socket error keeps the operating system's own code, which is
+ * what separates "nothing is listening" from "no route to host".
+ */
+export function sshConnectFailureCode(error) {
+  const level = error?.level;
+  if (level === "client-dns") {
+    return SSH_FAILURE_CODES.dnsFailure;
+  }
+  if (level === "client-timeout") {
+    return SSH_FAILURE_CODES.timeout;
+  }
+  if (level === "client-authentication" || level === "agent") {
+    return SSH_FAILURE_CODES.authFailed;
+  }
+  if (level === "client-socket") {
+    switch (error?.code) {
+      case "ECONNREFUSED":
+        return SSH_FAILURE_CODES.refused;
+      case "ETIMEDOUT":
+        return SSH_FAILURE_CODES.timeout;
+      default:
+        return SSH_FAILURE_CODES.networkUnreachable;
+    }
+  }
+  return SSH_FAILURE_CODES.internal;
+}
+
+/**
+ * The message for a failed connection.
+ *
+ * Every sentence here is fixed text; only the host label is interpolated, and
+ * that label is sanitised by `safeHostLabel` — the same helper the host-key
+ * messages use, because a hostname carrying a control character would be
+ * rendered by the terminal as an escape sequence.
+ */
+export function sshConnectFailureMessage(code, label) {
+  switch (code) {
+    case SSH_FAILURE_CODES.dnsFailure:
+      return (
+        `Could not resolve the host name for ${label}. Check the host's address, ` +
+        "and your DNS or VPN if the host is on an internal network."
+      );
+    case SSH_FAILURE_CODES.refused:
+      return (
+        `Could not connect to ${label}: nothing is listening on that port. ` +
+        "Check the port number and that the SSH server is running."
+      );
+    case SSH_FAILURE_CODES.networkUnreachable:
+      return (
+        `Could not reach ${label}. Check your network connection, your VPN and ` +
+        "the firewall rules for this host."
+      );
+    case SSH_FAILURE_CODES.timeout:
+      return `The connection to ${label} timed out before the host answered.`;
+    case SSH_FAILURE_CODES.authFailed:
+      return (
+        `${label} refused the sign-in. Check the username, and the password or ` +
+        "the key for this host."
+      );
+    default:
+      return `Could not open an SSH session with ${label}.`;
+  }
+}
+
+/**
+ * Turn a failed connection into the error the client is told about.
+ *
+ * An error that already carries a user-facing reason keeps it: a refused host
+ * key, a refused sign-in method and a rejected host request each say
+ * something more specific than a connection failure can.
+ */
+export function sshConnectFailure(error, host) {
+  if (
+    error instanceof HostKeyRejectedError ||
+    error instanceof SshAuthRefusedError ||
+    error instanceof InvalidHostError ||
+    error instanceof SshConnectError
+  ) {
+    return error;
+  }
+
+  // A deadline is already typed and already carries a status the HTTP layer
+  // honours; wrapping it would turn a timeout into a generic failure.
+  if (error instanceof OperationTimeoutError) {
+    return error;
+  }
+
+  const code = sshConnectFailureCode(error);
+  const label = safeHostLabel(host?.hostname, host?.port);
+  return new SshConnectError(sshConnectFailureMessage(code, label), {
+    code,
+    cause: error,
+    level: error?.level,
+  });
+}

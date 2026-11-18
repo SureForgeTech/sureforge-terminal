@@ -7,6 +7,12 @@ export const REQUEST_BODY_MAX_BYTES = 1 * 1024 * 1024; // 1 MiB
 export const SFTP_UPLOAD_MAX_BYTES = 64 * 1024 * 1024; // 64 MiB (~48 MB file)
 /** Max bytes of terminal output held for a session while its ws is detached. */
 export const SESSION_BUFFER_MAX_BYTES = 256 * 1024; // 256 KiB
+/**
+ * Max bytes of terminal input held for a session whose shell has not opened
+ * yet. The same size as the websocket frame cap, so the buffer holds about
+ * one maximum-sized frame.
+ */
+export const SESSION_INPUT_MAX_BYTES = 64 * 1024; // 64 KiB
 
 export class PayloadTooLargeError extends Error {
   constructor(limit) {
@@ -146,5 +152,35 @@ export function bufferDetachedOutput(session, data, maxBytes = SESSION_BUFFER_MA
     const evictedBytes = Buffer.byteLength(evicted, "utf8");
     session.bufferBytes -= evictedBytes;
     session.droppedBytes += evictedBytes;
+  }
+}
+
+/**
+ * Hold terminal input typed before the session's shell exists.
+ *
+ * The session id is returned to the client as soon as the connection is
+ * established, which is before the shell has opened, so the first keystrokes
+ * can arrive before there is a stream to write them to. Dropping them loses
+ * what the user typed; holding them until the shell opens does not.
+ *
+ * The oldest bytes are evicted first, for the same reason the output buffer
+ * evicts the oldest chunk: the most recent keystrokes are the ones the user
+ * still cares about. Dropping the newest instead would leave the shell with a
+ * truncated PREFIX of a command line, which is worse than losing the start of
+ * one — a half-typed command is not a command.
+ *
+ * Mutates `session`; expects `session.pendingInput` (array),
+ * `session.pendingInputBytes` and `session.pendingInputDroppedBytes` (numbers)
+ * to be initialized.
+ */
+export function bufferPendingInput(session, data, maxBytes = SESSION_INPUT_MAX_BYTES) {
+  session.pendingInput.push(data);
+  session.pendingInputBytes += Buffer.byteLength(data, "utf8");
+  // Keep at least the most recent chunk even if it alone exceeds the cap.
+  while (session.pendingInputBytes > maxBytes && session.pendingInput.length > 1) {
+    const evicted = session.pendingInput.shift();
+    const evictedBytes = Buffer.byteLength(evicted, "utf8");
+    session.pendingInputBytes -= evictedBytes;
+    session.pendingInputDroppedBytes += evictedBytes;
   }
 }

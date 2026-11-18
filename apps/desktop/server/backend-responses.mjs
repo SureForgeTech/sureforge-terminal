@@ -7,6 +7,7 @@ import { PayloadTooLargeError } from "./backend-buffers.mjs";
 import { HostKeyRejectedError } from "./backend-host-keys.mjs";
 import { InvalidHostError } from "./backend-host-validation.mjs";
 import { SshAuthRefusedError } from "./backend-ssh-auth.mjs";
+import { SshConnectError } from "./backend-ssh-failure.mjs";
 
 /**
  * #230: raw errors are published here instead of logged. A subscriber attached
@@ -97,5 +98,19 @@ export function respondError(response, error, status = 500) {
     message = error.message;
   }
 
-  sendJson(response, statusCode, { error: message });
+  // The same exception for a failed connection: the reason a host could not
+  // be reached is the reason the user needs, and it is what the native shell
+  // already sends (a typed { code, message } — see src-tauri/src/ipc_error.rs).
+  // Without it every failed connection reads as "Internal server error.".
+  if (error instanceof SshConnectError) {
+    message = error.message;
+  }
+
+  // A typed failure carries its code alongside the message, so the client can
+  // categorise it (and must not retry a refused sign-in) without reading the
+  // text. The code is one of a fixed set the backend chose, never text from
+  // the error.
+  const code = error instanceof SshConnectError ? error.code : undefined;
+
+  sendJson(response, statusCode, code ? { error: message, code } : { error: message });
 }

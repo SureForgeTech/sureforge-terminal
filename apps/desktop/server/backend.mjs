@@ -62,7 +62,11 @@ import {
   SshConfigResolutionRegistry,
 } from "./ssh-config-resolution.mjs";
 
-import { createSshSessionManager } from "./backend-ssh-session.mjs";
+import {
+  applySessionResize,
+  createSshSessionManager,
+  writeSessionInput,
+} from "./backend-ssh-session.mjs";
 import { createSftpOperations } from "./backend-sftp-ops.mjs";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const appRoot = normalize(join(__dirname, ".."));
@@ -240,9 +244,14 @@ function failSession(session, error) {
   // A failed host-key verification is exactly that case, and its reason is the
   // whole point of reporting it.
   session.failureMessage = getErrorMessage(error);
+  // A typed failure also carries the code the renderer's classifier branches
+  // on. Without it a refused sign-in could be read as an unclassified failure
+  // and retried, and repeated failed logins can lock the account.
+  session.failureCode = typeof error?.code === "string" ? error.code : null;
   broadcast(session, {
     type: "error",
     message: session.failureMessage,
+    ...(session.failureCode ? { code: session.failureCode } : {}),
   });
 }
 
@@ -960,6 +969,7 @@ server.on("upgrade", (request, socket, head) => {
         JSON.stringify({
           type: "error",
           message: session.failureMessage,
+          ...(session.failureCode ? { code: session.failureCode } : {}),
         })
       );
     }
@@ -990,11 +1000,16 @@ server.on("upgrade", (request, socket, head) => {
       }
       try {
         const message = JSON.parse(raw.toString("utf8"));
-        if (message.type === "input" && session.stream) {
-          session.stream.write(message.data);
+        if (message.type === "input") {
+          // The session id reaches the client before the shell exists, so
+          // input can arrive before there is a stream to write it to. It is
+          // held until the shell opens rather than dropped.
+          writeSessionInput(session, message.data);
         }
-        if (message.type === "resize" && session.stream) {
-          session.stream.setWindow(message.rows, message.cols, message.rows * 16, message.cols * 8);
+        if (message.type === "resize") {
+          // A size that arrives before the shell exists is applied when it
+          // opens, not dropped.
+          applySessionResize(session, message.rows, message.cols);
         }
       } catch {
         // Ignore malformed websocket frames.
