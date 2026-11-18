@@ -163,24 +163,30 @@ export function bufferDetachedOutput(session, data, maxBytes = SESSION_BUFFER_MA
  * can arrive before there is a stream to write them to. Dropping them loses
  * what the user typed; holding them until the shell opens does not.
  *
- * The oldest bytes are evicted first, for the same reason the output buffer
- * evicts the oldest chunk: the most recent keystrokes are the ones the user
- * still cares about. Dropping the newest instead would leave the shell with a
- * truncated PREFIX of a command line, which is worse than losing the start of
- * one — a half-typed command is not a command.
+ * When the buffer is over its cap the NEWEST bytes are dropped, which keeps
+ * the beginning of what was typed. That is the opposite of the output buffer,
+ * which keeps the newest chunk — and deliberately so: output is a display,
+ * where the latest bytes matter, while input is a command stream, where the
+ * earliest bytes are the command. Keeping the start leaves the shell a prefix
+ * ("rm -rf ") that waits for more input; keeping the end would leave it a
+ * suffix ("rf /tmp/x") that is a DIFFERENT command, and the shell would run
+ * that one.
+ *
+ * The cap is unreachable in practice — it is 64 KiB of typing before a shell
+ * opens — so this is a bound on memory, not a behaviour anyone sees.
  *
  * Mutates `session`; expects `session.pendingInput` (array),
  * `session.pendingInputBytes` and `session.pendingInputDroppedBytes` (numbers)
  * to be initialized.
  */
 export function bufferPendingInput(session, data, maxBytes = SESSION_INPUT_MAX_BYTES) {
-  session.pendingInput.push(data);
-  session.pendingInputBytes += Buffer.byteLength(data, "utf8");
-  // Keep at least the most recent chunk even if it alone exceeds the cap.
-  while (session.pendingInputBytes > maxBytes && session.pendingInput.length > 1) {
-    const evicted = session.pendingInput.shift();
-    const evictedBytes = Buffer.byteLength(evicted, "utf8");
-    session.pendingInputBytes -= evictedBytes;
-    session.pendingInputDroppedBytes += evictedBytes;
+  const bytes = Buffer.byteLength(data, "utf8");
+  // The newest bytes do not fit: they are dropped, and what is kept is the
+  // start of what was typed.
+  if (session.pendingInputBytes + bytes > maxBytes) {
+    session.pendingInputDroppedBytes += bytes;
+    return;
   }
+  session.pendingInput.push(data);
+  session.pendingInputBytes += bytes;
 }

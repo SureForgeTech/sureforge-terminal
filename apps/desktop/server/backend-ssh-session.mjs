@@ -427,6 +427,14 @@ export function createSshSessionManager({
 
       session.client.on("error", (error) => {
         session.jumpClient?.end();
+        // The connection failed, so the wait for the shell is over: leaving
+        // the timer armed would replace this reason with a timeout one, and
+        // the user would be told the host went quiet when the real fault was
+        // a dropped connection.
+        if (session.shellTimer) {
+          clearTimeout(session.shellTimer);
+          session.shellTimer = null;
+        }
         // A refused host key is reported with the reason, not ssh2's bare
         // "Host denied (verification failed)". Every other failure is
         // reported with a code and a message the user can act on.
@@ -434,6 +442,10 @@ export function createSshSessionManager({
       });
 
       session.client.on("close", () => {
+        if (session.shellTimer) {
+          clearTimeout(session.shellTimer);
+          session.shellTimer = null;
+        }
         if (session.state !== "disconnected") {
           session.state = "disconnected";
           broadcast(session, {

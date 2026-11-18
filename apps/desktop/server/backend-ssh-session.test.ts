@@ -230,6 +230,21 @@ describe("backend ssh session lifecycle", () => {
     expect(stream.windows).toEqual([{ rows: 40, cols: 100, height: 40 * 16, width: 100 * 8 }]);
   });
 
+  it("holds the size that arrives over the HTTP resize route, the only one the client uses", async () => {
+    // The pane lays out as soon as it mounts, which is before the shell has
+    // opened, so the size arrives over the HTTP route. That route used to
+    // answer "pending" and drop the size, leaving the session at the default
+    // 120x36 until the window happened to change again — while the websocket
+    // frame, which nothing sends, held it.
+    //
+    // Source-contract test because importing backend.mjs binds a port.
+    const { readFile } = await import("node:fs/promises");
+    const source = await readFile("apps/desktop/server/backend.mjs", "utf8");
+
+    expect(source).toMatch(/applySessionResize\(session, body\.rows, body\.cols\)/);
+    expect(source).not.toContain("pending: true");
+  });
+
   it("fails the session when the shell stream errors, instead of throwing", async () => {
     const { manager, failures } = await makeManager();
     const session = await manager.createSshSession(host());
@@ -265,11 +280,25 @@ describe("backend ssh session lifecycle", () => {
 
   it("releases the jump connection and scrubs the credentials when the jump host refuses", async () => {
     const { SecretBuffer } = await import("./secrets.mjs");
-    const scrub = vi.spyOn(SecretBuffer.prototype, "scrub");
+    // Which secret was scrubbed matters: the jump host's credentials are
+    // scrubbed by connectClient's finally, which pre-dates this change. The
+    // claim is about the TARGET host's credentials, which were left on the
+    // heap because the jump connect happened before the scrub.
+    const created: Array<{ value: string; secret: InstanceType<typeof SecretBuffer> }> = [];
+    const originalFromString = SecretBuffer.fromString;
+    vi.spyOn(SecretBuffer, "fromString").mockImplementation((value: string) => {
+      const secret = originalFromString.call(SecretBuffer, value) as InstanceType<
+        typeof SecretBuffer
+      >;
+      created.push({ value, secret });
+      return secret;
+    });
     const { manager } = await makeManager();
 
+    const targetPassword = "target-host-password";
+    const jumpPassword = "jump-host-password";
     const failing = manager.createSshSession(
-      host({ jumpHost: host({ hostname: "127.0.0.2" }) })
+      host({ password: targetPassword, jumpHost: host({ hostname: "127.0.0.2", password: jumpPassword }) })
     );
 
     // The jump connection authenticates, then the jump host refuses.
@@ -279,8 +308,10 @@ describe("backend ssh session lifecycle", () => {
     await expect(failing).rejects.toThrow();
     // The jump client was released rather than left authenticated.
     expect(jumpClient.ended).toBe(true);
-    // The credentials were wiped rather than left on the heap.
-    expect(scrub).toHaveBeenCalled();
+    // The TARGET host's credentials were wiped rather than left on the heap.
+    const target = created.find((entry) => entry.value === targetPassword);
+    expect(target).toBeDefined();
+    expect(target?.secret.isScrubbed).toBe(true);
   });
 
   it("gives up on a jump host that never opens the tunnel", async () => {

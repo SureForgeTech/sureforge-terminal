@@ -188,6 +188,64 @@ describe("createTerminalPaneNativeSessionController", () => {
     );
   });
 
+  it("does not retry a refused sign-in the backend reported with a code", async () => {
+    // The backend's failure message is fixed text, so the category cannot be
+    // read from it — it travels as a code beside the message. A refused
+    // sign-in must not be retried: the same credentials will be refused
+    // again, and repeated failed logins can lock the account.
+    createBackendSession.mockResolvedValue({ sessionId: "session-1" });
+    const socket = new FakeSocket();
+    openBackendSessionSocket.mockResolvedValue(socket);
+    const setPaneState = vi.fn();
+    const controller = makeController(setPaneState);
+
+    await controller.connectNativeSession();
+    socket.dispatch("message", {
+      data: JSON.stringify({
+        type: "error",
+        message: "gateway.internal:22 refused the sign-in. Check the username.",
+        code: "auth_failed",
+      }),
+    });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(openBackendSessionSocket).toHaveBeenCalledTimes(1);
+    expect(setPaneState).toHaveBeenLastCalledWith(
+      "pane-1",
+      "error",
+      "gateway.internal:22 refused the sign-in. Check the username."
+    );
+  });
+
+  it("retries a failure the backend reported with a retryable code", async () => {
+    // The other side of the same rule: a host that could not be reached is
+    // worth another attempt, and the code is what says so.
+    createBackendSession
+      .mockResolvedValueOnce({ sessionId: "session-1" })
+      .mockResolvedValueOnce({ sessionId: "session-2" });
+    const socket = new FakeSocket();
+    openBackendSessionSocket.mockResolvedValue(socket);
+    const setPaneState = vi.fn();
+    const controller = makeController(setPaneState);
+
+    await controller.connectNativeSession();
+    // A session that had connected is retried when it fails; a first attempt
+    // that never connected is not, and the user is told why.
+    socket.dispatch("message", {
+      data: JSON.stringify({ type: "status", state: "connected" }),
+    });
+    socket.dispatch("message", {
+      data: JSON.stringify({
+        type: "error",
+        message: "Could not reach gateway.internal:22. Check your network connection.",
+        code: "network_unreachable",
+      }),
+    });
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(openBackendSessionSocket).toHaveBeenCalledTimes(2);
+  });
+
   it("#510: a new attempt after an error applies its own statuses", async () => {
     const sockets: FakeSocket[] = [];
     createBackendSession

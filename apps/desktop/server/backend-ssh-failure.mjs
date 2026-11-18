@@ -15,7 +15,14 @@
 //
 // The message is built from fixed text and the host label only. #230 denies
 // relaying an arbitrary error message, so the underlying ssh2 error stays on
-// the server as the error's `cause` and is never sent to a client.
+// the server as the error's `cause` and is never sent to a client over HTTP.
+//
+// The websocket path is a separate contract: a session frame carries the
+// real message, because that is what the terminal has always shown for a
+// failure it could not classify (see the source-contract test in
+// tests/integration/backend-responses.integration.test.ts). What the code
+// adds there is the category, so that a failure the text cannot describe is
+// still classified.
 
 import { HostKeyRejectedError, safeHostLabel } from "./backend-host-keys.mjs";
 import { InvalidHostError } from "./backend-host-validation.mjs";
@@ -40,6 +47,15 @@ export const SSH_FAILURE_CODES = Object.freeze({
   dnsFailure: "dns_failure",
   internal: "internal",
 });
+
+/**
+ * The codes this backend is willing to put on the wire.
+ *
+ * An error can carry any `code` property — a Node error code, say — and
+ * relaying an arbitrary one would put text on the wire that this backend
+ * never chose. Only a category the client knows is relayed.
+ */
+export const SSH_FAILURE_CODE_VALUES = new Set(Object.values(SSH_FAILURE_CODES));
 
 /**
  * A connection that failed for a reason the user can act on.

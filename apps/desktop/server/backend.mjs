@@ -67,6 +67,7 @@ import {
   createSshSessionManager,
   writeSessionInput,
 } from "./backend-ssh-session.mjs";
+import { SSH_FAILURE_CODE_VALUES } from "./backend-ssh-failure.mjs";
 import { createSftpOperations } from "./backend-sftp-ops.mjs";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const appRoot = normalize(join(__dirname, ".."));
@@ -243,11 +244,20 @@ function failSession(session, error) {
   // in two steps — and a broadcast to nobody is a message the user never sees.
   // A failed host-key verification is exactly that case, and its reason is the
   // whole point of reporting it.
-  session.failureMessage = getErrorMessage(error);
-  // A typed failure also carries the code the renderer's classifier branches
-  // on. Without it a refused sign-in could be read as an unclassified failure
-  // and retried, and repeated failed logins can lock the account.
-  session.failureCode = typeof error?.code === "string" ? error.code : null;
+  //
+  // The FIRST reason is kept. A session can fail twice — the connection drops
+  // and the shell never opens — and the first failure is the cause; the second
+  // is a consequence, and reporting it would tell the user about the symptom
+  // instead.
+  if (!session.failureMessage) {
+    session.failureMessage = getErrorMessage(error);
+    // A typed failure also carries the code the renderer's classifier branches
+    // on. Without it a refused sign-in could be read as an unclassified
+    // failure and retried, and repeated failed logins can lock the account.
+    // Only a code this backend chooses is relayed: an arbitrary error code
+    // (a Node error code, say) is not a category the client understands.
+    session.failureCode = SSH_FAILURE_CODE_VALUES.has(error?.code) ? error.code : null;
+  }
   broadcast(session, {
     type: "error",
     message: session.failureMessage,
@@ -866,12 +876,11 @@ const server = createServer(async (request, response) => {
 
     try {
       const body = await readJson(request);
-      if (!session.stream) {
-        sendJson(response, 200, { ok: true, pending: true });
-        return;
-      }
-
-      session.stream.setWindow(body.rows, body.cols, body.rows * 16, body.cols * 8);
+      // The pane lays out as soon as it mounts, which is before the shell has
+      // opened, so the size can arrive with no stream to apply it to. Hold it
+      // and apply it when the shell opens; dropping it left the session at the
+      // default 120x36 until the window happened to change again.
+      applySessionResize(session, body.rows, body.cols);
       sendJson(response, 200, { ok: true });
     } catch (error) {
       respondError(response, error);
