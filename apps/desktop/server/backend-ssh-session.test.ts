@@ -269,6 +269,31 @@ describe("backend ssh session lifecycle", () => {
     expect(session.pendingInputBytes).toBeLessThanOrEqual(64 * 1024);
   });
 
+  it("reports the input it had to drop, rather than losing it quietly", async () => {
+    // The output buffer says how much output it dropped; the input buffer
+    // says the same about what was typed.
+    const frames: Array<{ type: string; data?: string }> = [];
+    const { manager } = await makeManager({
+      broadcast: (session: unknown, frame: { type: string; data?: string }) => {
+        frames.push(frame);
+      },
+    });
+    const session = await manager.createSshSession(host());
+
+    const { writeSessionInput } = await import("./backend-ssh-session.mjs");
+    writeSessionInput(session, "x".repeat(70 * 1024));
+
+    const client = ssh2.clients[0];
+    client.emit("ready");
+    const stream = new FakeStream();
+    await waitFor(() => client.shellCallback !== undefined);
+    client.shellCallback?.(undefined, stream);
+
+    const note = frames.find((frame) => frame.data?.includes("were dropped"));
+    expect(note?.data).toContain("bytes of input typed");
+    expect(note?.data).not.toContain("x".repeat(100));
+  });
+
   it("fails the session when the shell stream errors, instead of throwing", async () => {
     const { manager, failures } = await makeManager();
     const session = await manager.createSshSession(host());
@@ -338,6 +363,45 @@ describe("backend ssh session lifecycle", () => {
     expect(session.state).not.toBe("connected");
     expect(session.stream).toBeNull();
     expect(stream.written).toEqual([]);
+  });
+
+  it("does not resurrect a session that was retired before its shell opened", async () => {
+    // The DELETE path: the user closed the tab, and the session was retired.
+    // A shell that answers afterwards must not bring it back.
+    const { manager, sessions } = await makeManager();
+    const session = await manager.createSshSession(host());
+
+    const client = ssh2.clients[0];
+    client.emit("ready");
+    await manager.retireSession(session);
+    expect(sessions.has(session.id)).toBe(false);
+
+    const { writeSessionInput } = await import("./backend-ssh-session.mjs");
+    writeSessionInput(session, "echo should-not-run\r");
+    const stream = new FakeStream();
+    client.shellCallback?.(undefined, stream);
+
+    expect(session.state).not.toBe("connected");
+    expect(session.stream).toBeNull();
+    expect(stream.written).toEqual([]);
+  });
+
+  it("reports a private key that cannot be read, in fixed words", async () => {
+    // The raw error names the absolute path on this machine, which has no
+    // business in a client's terminal. The category says it is not worth
+    // retrying with the same key.
+    const { manager } = await makeManager();
+    const missing = join(stateDir, "no-such-key");
+
+    const failure = await manager
+      .createSshSession(
+        host({ authMethod: "privateKey", privateKeyPath: missing, password: "" })
+      )
+      .catch((error: unknown) => error);
+
+    expect((failure as Error).message).toContain("private key could not be read");
+    expect((failure as Error).message).not.toContain(missing);
+    expect((failure as { code?: string }).code).toBe("auth_failed");
   });
 
   it("reports a refused shell with fixed text, not the server's wording", async () => {

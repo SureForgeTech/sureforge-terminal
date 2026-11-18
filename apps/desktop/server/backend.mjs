@@ -67,7 +67,7 @@ import {
   createSshSessionManager,
   writeSessionInput,
 } from "./backend-ssh-session.mjs";
-import { SSH_FAILURE_CODE_VALUES } from "./backend-ssh-failure.mjs";
+import { relayableFailureCode } from "./backend-failure-codes.mjs";
 import { sessionFailureFrame } from "./backend-session-frames.mjs";
 import { createSftpOperations } from "./backend-sftp-ops.mjs";
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -257,7 +257,7 @@ function failSession(session, error) {
     // failure and retried, and repeated failed logins can lock the account.
     // Only a code this backend chooses is relayed: an arbitrary error code
     // (a Node error code, say) is not a category the client understands.
-    session.failureCode = SSH_FAILURE_CODE_VALUES.has(error?.code) ? error.code : null;
+    session.failureCode = relayableFailureCode(error) ?? null;
   }
   broadcast(session, sessionFailureFrame(session));
 }

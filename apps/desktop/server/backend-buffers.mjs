@@ -183,7 +183,9 @@ export function bufferDetachedOutput(session, data, maxBytes = SESSION_BUFFER_MA
  *
  * Mutates `session`; expects `session.pendingInput` (array),
  * `session.pendingInputBytes` and `session.pendingInputDroppedBytes` (numbers)
- * to be initialized.
+ * to be initialized. The dropped bytes are counted so the caller can tell
+ * the user that part of what they typed did not survive — the output buffer
+ * does the same for the output it had to drop.
  */
 export function bufferPendingInput(
   session,

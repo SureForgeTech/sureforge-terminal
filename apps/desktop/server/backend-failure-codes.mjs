@@ -33,3 +33,14 @@ export const SSH_FAILURE_CODES = Object.freeze({
  * never chose. Only a category the client knows is relayed.
  */
 export const SSH_FAILURE_CODE_VALUES = new Set(Object.values(SSH_FAILURE_CODES));
+
+/**
+ * The category to put on the wire for an error, or undefined for none.
+ *
+ * An error can carry any `code` property — a Node error code, say — and
+ * relaying an arbitrary one would put text on the wire that this backend
+ * never chose. Only a category the client knows is relayed.
+ */
+export function relayableFailureCode(error) {
+  return SSH_FAILURE_CODE_VALUES.has(error?.code) ? error.code : undefined;
+}

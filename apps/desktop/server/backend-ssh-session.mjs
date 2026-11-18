@@ -173,7 +173,19 @@ export function createSshSessionManager({
     } else if (host.authMethod === "privateKey") {
       // Read the private key as a Buffer (the default for fs.readFile without
       // an encoding) so we can fill it with zeros after ssh2 has parsed it.
-      const keyBuffer = await readFile(expandHome(host.privateKeyPath));
+      //
+      // A key that cannot be read is the user's configuration, not a server
+      // fault, and the reason is fixed text: the raw error names the absolute
+      // path on this machine, which has no business in a client's terminal.
+      let keyBuffer;
+      try {
+        keyBuffer = await readFile(expandHome(host.privateKeyPath));
+      } catch (error) {
+        throw new SshConnectError(
+          "The private key could not be read. Check the key path for this host.",
+          { code: SSH_FAILURE_CODES.authFailed, cause: error }
+        );
+      }
       connectConfig.privateKey = keyBuffer;
       cleanups.push(() => {
         keyBuffer.fill(0);
@@ -430,13 +442,18 @@ export function createSshSessionManager({
             );
             // The error alone leaves the connection open: the close handler
             // is what retires the session, and an error is not always
-            // followed by a close. Ending the client triggers it.
+            // followed by a close. Ending the client triggers it — and the
+            // session is retired here too, because a peer that never
+            // completes the close would otherwise keep the connection and
+            // the session for the life of the backend process. Retiring twice
+            // is harmless.
             try {
               stream.destroy?.();
             } catch {
               // The stream is already gone.
             }
             session.client.end();
+            void retireSession(session);
           });
 
           stream.on("close", async () => {
@@ -459,6 +476,18 @@ export function createSshSessionManager({
           if (session.pendingResize) {
             applySessionResize(session, session.pendingResize.rows, session.pendingResize.cols);
             session.pendingResize = null;
+          }
+          // If some of what was typed did not fit, say so rather than let the
+          // user wonder why a command came out wrong. The output buffer says
+          // the same thing about the output it had to drop.
+          if (session.pendingInputDroppedBytes > 0) {
+            broadcast(session, {
+              type: "data",
+              data:
+                `\r\n[terminal-workspace: ${session.pendingInputDroppedBytes} bytes of input typed ` +
+                "before the shell opened were dropped]\r\n",
+            });
+            session.pendingInputDroppedBytes = 0;
           }
           flushPendingInput(session);
         };
@@ -528,21 +557,21 @@ export function createSshSessionManager({
         session.jumpClient?.end();
         if (!session.retireTimer && sessions.get(session.id) === session) {
           session.retireTimer = setTimeout(() => {
-          session.retireTimer = null;
-          void retireSession(session);
-        }, failedSessionRetentionMs);
-        session.retireTimer.unref?.();
-      }
-    });
+            session.retireTimer = null;
+            void retireSession(session);
+          }, failedSessionRetentionMs);
+          session.retireTimer.unref?.();
+        }
+      });
 
-    try {
-      session.client.connect(connectConfig);
-    } finally {
-      // ssh2 reads password / passphrase / privateKey synchronously inside
-      // client.connect() (same contract connectClient relies on). Wipe our
-      // copies so they do not sit on the heap for the session lifetime.
-      scrubConfig();
-    }
+      try {
+        session.client.connect(connectConfig);
+      } finally {
+        // ssh2 reads password / passphrase / privateKey synchronously inside
+        // client.connect() (same contract connectClient relies on). Wipe our
+        // copies so they do not sit on the heap for the session lifetime.
+        scrubConfig();
+      }
       sessions.set(session.id, session);
       return session;
     } catch (error) {

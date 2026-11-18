@@ -374,12 +374,14 @@ describe("a failed connection is reported with a code and a reason", () => {
 
   it("checks the websocket failure code against the backend's own set too", async () => {
     // The HTTP path and the websocket path have to agree about which codes
-    // may go on the wire. Source-contract test because importing backend.mjs
-    // binds a port.
+    // may go on the wire. The decision itself is pinned by the behaviour test
+    // in backend-failure-codes.integration.test.ts; this pins that the
+    // websocket path uses that decision rather than a check of its own.
+    // Source-contract test because importing backend.mjs binds a port.
     const { readFile } = await import("node:fs/promises");
     const source = await readFile("apps/desktop/server/backend.mjs", "utf8");
 
-    expect(source).toContain("SSH_FAILURE_CODE_VALUES.has(error?.code)");
+    expect(source).toContain("relayableFailureCode(error)");
   });
 
   it("classifies the ssh2 failures into the categories the client knows", async () => {
@@ -389,7 +391,7 @@ describe("a failed connection is reported with a code and a reason", () => {
     const host = { hostname: "gateway.internal", port: 22 };
 
     const refused = sshConnectFailure(
-      Object.assign(new Error("connect ECONNREFUSED 10.0.0.1:22"), {
+      Object.assign(new Error("connect ECONNREFUSED 192.0.2.1:22"), {
         level: "client-socket",
         code: "ECONNREFUSED",
       }),

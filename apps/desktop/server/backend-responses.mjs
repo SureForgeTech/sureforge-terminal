@@ -7,7 +7,8 @@ import { PayloadTooLargeError } from "./backend-buffers.mjs";
 import { HostKeyRejectedError } from "./backend-host-keys.mjs";
 import { InvalidHostError } from "./backend-host-validation.mjs";
 import { SshAuthRefusedError } from "./backend-ssh-auth.mjs";
-import { SshConnectError, SSH_FAILURE_CODE_VALUES } from "./backend-ssh-failure.mjs";
+import { SshConnectError } from "./backend-ssh-failure.mjs";
+import { relayableFailureCode } from "./backend-failure-codes.mjs";
 import { SftpOperationError } from "./backend-sftp-failure.mjs";
 import { InvalidForwardRequestError } from "./backend-forwards.mjs";
 
@@ -113,8 +114,7 @@ export function respondError(response, error, status = 500) {
   // key) without reading the text. The category travels only with a relayed
   // message, and only when it is one of a fixed set the backend chose — never
   // text from the error. The same check the websocket path makes.
-  const code =
-    isRelayedType && SSH_FAILURE_CODE_VALUES.has(error?.code) ? error.code : undefined;
+  const code = isRelayedType ? relayableFailureCode(error) : undefined;
 
   sendJson(response, statusCode, code ? { error: message, code } : { error: message });
 }
