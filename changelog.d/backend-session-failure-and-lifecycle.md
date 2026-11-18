@@ -1,0 +1,2 @@
+- [FIX] Browser mode: input typed before the shell opens is no longer dropped, a session whose shell never opens fails with a reason instead of waiting for ever, a shell stream error fails the session instead of being an uncaught exception, and a failed jump host no longer leaves an authenticated connection and the host's credentials behind.
+- [FIX] Browser mode: a failed SSH connection reports what went wrong and its category instead of "Internal server error.", so a refused sign-in is still recognised as one and is still not retried.
