@@ -195,6 +195,70 @@ describe("a failed connection is reported with a code and a reason", () => {
     expect(JSON.parse(response.recorded.body!)).toEqual({ error: "Internal server error." });
   });
 
+  it("relays a refused file operation's reason, and only that reason", async () => {
+    // "Permission denied" and "No such file" are the two failures a user
+    // meets most, and both used to arrive as "Internal server error.".
+    const { SftpOperationError, SFTP_STATUS } = await import(
+      "../../apps/desktop/server/backend-sftp-failure.mjs"
+    );
+    const sentinel = "TS_SFTP_RELAY_PROBE_7a1c44";
+    const response = recordingResponse();
+
+    respondError(
+      response,
+      new SftpOperationError("The server refused access to that path.", {
+        statusCode: 403,
+        cause: new Error(`Permission denied: ${sentinel}`),
+      })
+    );
+
+    expect(response.recorded.status).toBe(403);
+    expect(JSON.parse(response.recorded.body!)).toEqual({
+      error: "The server refused access to that path.",
+    });
+    // The server's own wording is still not relayed.
+    expect(response.recorded.body).not.toContain(sentinel);
+    expect(SFTP_STATUS.permissionDenied).toBe(3);
+  });
+
+  it("still refuses to relay a look-alike that is not a file-operation failure", async () => {
+    const { SFTP_STATUS } = await import(
+      "../../apps/desktop/server/backend-sftp-failure.mjs"
+    );
+    const sentinel = "TS_SFTP_LOOKALIKE_PROBE_9d3b21";
+    const impostor = Object.assign(new Error(`refused access ${sentinel}`), {
+      statusCode: 403,
+      code: SFTP_STATUS.permissionDenied,
+    });
+    const response = recordingResponse();
+
+    respondError(response, impostor);
+
+    // The exception is by TYPE: the look-alike gets the generic text for the
+    // status it carries, and none of its own wording.
+    expect(response.recorded.body).not.toContain(sentinel);
+    expect(JSON.parse(response.recorded.body!)).toEqual({ error: "Invalid request." });
+  });
+
+  it("relays a refused forward request's reason, and only that reason", async () => {
+    const { InvalidForwardRequestError } = await import(
+      "../../apps/desktop/server/backend-forwards.mjs"
+    );
+    const sentinel = "TS_FORWARD_RELAY_PROBE_2f6b70";
+    const response = recordingResponse();
+
+    respondError(
+      response,
+      new InvalidForwardRequestError("Local bind port must be 0 (automatic) or 1-65535")
+    );
+
+    expect(response.recorded.status).toBe(400);
+    expect(JSON.parse(response.recorded.body!)).toEqual({
+      error: "Local bind port must be 0 (automatic) or 1-65535",
+    });
+    expect(response.recorded.body).not.toContain(sentinel);
+  });
+
   it("classifies the ssh2 failures into the categories the client knows", async () => {
     const { sshConnectFailure, SSH_FAILURE_CODES } = await import(
       "../../apps/desktop/server/backend-ssh-failure.mjs"

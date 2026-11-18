@@ -175,6 +175,7 @@ export function createSftpOperations({ withSftp }) {
         sftp.close(handle, () => {});
       });
 
+      let writeError;
       try {
         await new Promise((resolve, reject) => {
           sftp.write(handle, buffer, 0, buffer.length, 0, (error) => {
@@ -186,18 +187,24 @@ export function createSftpOperations({ withSftp }) {
             resolve();
           });
         });
-      } finally {
-        closeStarted = true;
-        await new Promise((resolve, reject) => {
-          sftp.close(handle, (error) => {
-            if (error) {
-              reject(error);
-              return;
-            }
+      } catch (error) {
+        writeError = error;
+      }
 
-            resolve();
-          });
-        });
+      // The handle is closed whatever happened. A close failure must not
+      // REPLACE the write's failure: the write is the reason the upload
+      // failed, and it is the reason the user needs. The close is only
+      // reported when the write succeeded.
+      closeStarted = true;
+      const closeError = await new Promise((resolve) => {
+        sftp.close(handle, (error) => resolve(error));
+      }).catch(() => undefined);
+
+      if (writeError) {
+        throw writeError;
+      }
+      if (closeError) {
+        throw sftpOperationFailure(closeError);
       }
 
       return targetPath;
@@ -260,6 +267,13 @@ export function createSftpOperations({ withSftp }) {
 
         try {
           await pipeline(readStream, response);
+        } catch (error) {
+          // A read failure is an SFTP status failure like any other (the file
+          // can vanish between the stat and the open), so it is wrapped the
+          // same way. The headers are already committed by this point, so the
+          // client sees the transfer fail rather than the message — the stat
+          // above is what catches the usual "no such file" before that.
+          throw sftpOperationFailure(error);
         } finally {
           readStream.off("open", onProgress);
           readStream.off("data", onProgress);

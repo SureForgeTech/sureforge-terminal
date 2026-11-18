@@ -20,6 +20,12 @@ import {
   validateForwardPorts,
 } from "../../apps/desktop/server/backend-forwards.mjs";
 
+function denied() {
+  return Object.assign(new Error("Permission denied"), {
+    code: SFTP_STATUS.permissionDenied,
+  });
+}
+
 describe("a refused file operation", () => {
   it("says what the server refused and why it matters", () => {
     const denied = sftpOperationFailure(
@@ -79,31 +85,97 @@ describe("a refused file operation", () => {
 });
 
 describe("a refused forward request", () => {
-  it("wraps the failure the server reports when a directory cannot be listed", async () => {
+  it("wraps the failure the server reports on every operation", async () => {
     // The helper is not enough on its own: the operations have to use it, or
     // the raw server error still reaches the HTTP layer and is rebuilt as
-    // "Internal server error.".
+    // "Internal server error.". Every operation that can fail is driven
+    // here, because one covered path proves nothing about the other five.
     const { createSftpOperations } = await import(
       "../../apps/desktop/server/backend-sftp-ops.mjs"
     );
-    const operations = createSftpOperations({
-      withSftp: async (_host: unknown, run: (handle: unknown) => Promise<unknown>) =>
-        run({
-          sftp: {
-            readdir: (
-              _path: string,
-              callback: (error: Error) => void
-            ) => callback(Object.assign(new Error("Permission denied"), { code: SFTP_STATUS.permissionDenied })),
-          },
-        }),
-    });
 
-    const failure = await operations
-      .listRemoteDirectory({ hostname: "gateway.internal", port: 22 }, "/etc")
-      .catch((error: unknown) => error);
+    const failing = (error: Error) => error;
+    const operations = [
+      {
+        name: "listing a directory",
+        run: (ops: ReturnType<typeof createSftpOperations>) =>
+          ops.listRemoteDirectory({ hostname: "gateway.internal", port: 22 }, "/etc"),
+        sftp: { readdir: (_path: string, cb: (error: Error) => void) => cb(failing(denied())) },
+      },
+      {
+        name: "making a directory",
+        run: (ops: ReturnType<typeof createSftpOperations>) =>
+          ops.createRemoteDirectory({ hostname: "gateway.internal", port: 22 }, "/etc/new"),
+        sftp: { mkdir: (_path: string, cb: (error: Error) => void) => cb(failing(denied())) },
+      },
+      {
+        name: "renaming an entry",
+        run: (ops: ReturnType<typeof createSftpOperations>) =>
+          ops.renameRemoteEntry(
+            { hostname: "gateway.internal", port: 22 },
+            "/etc/a",
+            "/etc/b"
+          ),
+        sftp: {
+          rename: (_from: string, _to: string, cb: (error: Error) => void) =>
+            cb(failing(denied())),
+        },
+      },
+      {
+        name: "deleting an entry",
+        run: (ops: ReturnType<typeof createSftpOperations>) =>
+          ops.deleteRemoteEntry({ hostname: "gateway.internal", port: 22 }, "/etc/a", false),
+        sftp: { unlink: (_path: string, cb: (error: Error) => void) => cb(failing(denied())) },
+      },
+      {
+        name: "uploading a file",
+        run: (ops: ReturnType<typeof createSftpOperations>) =>
+          ops.uploadRemoteFile({ hostname: "gateway.internal", port: 22 }, "/etc/a", "aGk="),
+        sftp: {
+          open: (_path: string, _mode: string, cb: (error: Error) => void) =>
+            cb(failing(denied())),
+          close: (_handle: unknown, cb: (error?: Error) => void) => cb(undefined),
+        },
+      },
+      {
+        name: "downloading a file",
+        run: (ops: ReturnType<typeof createSftpOperations>) =>
+          ops.sendRemoteFile(
+            { writeHead: () => {}, end: () => {}, on: () => {}, off: () => {}, destroy: () => {} },
+            { hostname: "gateway.internal", port: 22 },
+            "/etc/a"
+          ),
+        sftp: { stat: (_path: string, cb: (error: Error) => void) => cb(failing(denied())) },
+      },
+    ];
 
-    expect(failure).toBeInstanceOf(SftpOperationError);
-    expect((failure as Error).message).toContain("refused access");
+    for (const operation of operations) {
+      const built = createSftpOperations({
+        withSftp: async (
+          _host: unknown,
+          optionsOrRun: unknown,
+          maybeRun?: unknown
+        ): Promise<unknown> => {
+          // withSftp takes (host, callback) for a control operation and
+          // (host, options, callback) when it carries a deadline.
+          const run =
+            typeof optionsOrRun === "function" ? optionsOrRun : maybeRun;
+          return (run as (handle: unknown) => Promise<unknown>)({
+            sftp: operation.sftp,
+            onTimeout: () => {},
+            resetDeadline: () => {},
+          });
+        },
+      });
+
+      const failure = await operation
+        .run(built)
+        .catch((error: unknown) => error);
+
+      expect(failure, operation.name).toBeInstanceOf(SftpOperationError);
+      expect((failure as Error).message, operation.name).toContain("refused access");
+      expect((failure as { statusCode?: number }).statusCode, operation.name).toBe(403);
+    }
   });
 
   it("names the port that is wrong", () => {

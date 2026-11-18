@@ -102,7 +102,11 @@ export function sftpOperationFailure(error) {
   if (error instanceof SftpOperationError) {
     return error;
   }
-  if (typeof error?.code !== "number") {
+  // Only a status code this table knows is an SFTP failure. A number is not
+  // proof of that: an SSH disconnect reason is numeric too, and some of its
+  // values collide with the status numbers. An unrecognised code is left
+  // alone rather than turned into a file-operation message that may be wrong.
+  if (!Object.values(SFTP_STATUS).includes(error?.code)) {
     return error;
   }
   const { message, statusCode } = sftpOperationFailureMessage(error.code);
