@@ -1,0 +1,1 @@
+- [FIX] Browser mode: a host that presents a key other than the one approved for it is now refused with the reason — that the host may have been rebuilt, or that this may be a machine-in-the-middle attack — instead of "Internal server error.", and the refusal is still never retried automatically.
