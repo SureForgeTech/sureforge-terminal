@@ -198,7 +198,15 @@ export function createSftpOperations({ withSftp }) {
       closeStarted = true;
       const closeError = await new Promise((resolve) => {
         sftp.close(handle, (error) => resolve(error));
-      }).catch(() => undefined);
+      }).catch((error) => {
+        // A close that throws outright, rather than reporting a status, is
+        // still a failure — but only when the write succeeded. When the write
+        // already failed, the write's reason is the one that matters.
+        if (!writeError) {
+          throw error;
+        }
+        return undefined;
+      });
 
       if (writeError) {
         throw writeError;

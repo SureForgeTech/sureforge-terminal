@@ -7,6 +7,7 @@
 // reach a client — so the SFTP status code is what the message is built
 // from, and the server's text stays on the server.
 
+import { PassThrough, Writable } from "node:stream";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -19,6 +20,19 @@ import {
   InvalidForwardRequestError,
   validateForwardPorts,
 } from "../../apps/desktop/server/backend-forwards.mjs";
+
+/**
+ * A response the download can write into: a real Writable, so the pipeline
+ * behaves as it does in production, with the HTTP bits the backend calls.
+ */
+function downloadResponse() {
+  const response = new Writable({
+    write(_chunk, _encoding, callback) {
+      callback();
+    },
+  });
+  return Object.assign(response, { writeHead: () => {} });
+}
 
 function denied() {
   return Object.assign(new Error("Permission denied"), {
@@ -132,8 +146,19 @@ describe("a refused forward request", () => {
         run: (ops: ReturnType<typeof createSftpOperations>) =>
           ops.uploadRemoteFile({ hostname: "gateway.internal", port: 22 }, "/etc/a", "aGk="),
         sftp: {
-          open: (_path: string, _mode: string, cb: (error: Error) => void) =>
-            cb(failing(denied())),
+          // The write is what fails, not the open: the open has to succeed for
+          // the upload to reach the write, and the write's reason is the one
+          // that has to survive the close that follows it.
+          open: (_path: string, _mode: string, cb: (error: Error, handle?: unknown) => void) =>
+            cb(undefined, Buffer.from("handle")),
+          write: (
+            _handle: unknown,
+            _buffer: unknown,
+            _offset: number,
+            _length: number,
+            _position: number,
+            cb: (error: Error) => void
+          ) => cb(failing(denied())),
           close: (_handle: unknown, cb: (error?: Error) => void) => cb(undefined),
         },
       },
@@ -141,11 +166,21 @@ describe("a refused forward request", () => {
         name: "downloading a file",
         run: (ops: ReturnType<typeof createSftpOperations>) =>
           ops.sendRemoteFile(
-            { writeHead: () => {}, end: () => {}, on: () => {}, off: () => {}, destroy: () => {} },
+            downloadResponse(),
             { hostname: "gateway.internal", port: 22 },
             "/etc/a"
           ),
-        sftp: { stat: (_path: string, cb: (error: Error) => void) => cb(failing(denied())) },
+        sftp: {
+          // The stat succeeds and the read fails: the file can vanish between
+          // the two, and that failure is an SFTP status failure too.
+          stat: (_path: string, cb: (error: Error, stats?: unknown) => void) =>
+            cb(undefined, { size: 1 }),
+          createReadStream: () => {
+            const stream = new PassThrough();
+            process.nextTick(() => stream.emit("error", denied()));
+            return stream;
+          },
+        },
       },
     ];
 

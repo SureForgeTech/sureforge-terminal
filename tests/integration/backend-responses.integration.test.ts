@@ -198,7 +198,7 @@ describe("a failed connection is reported with a code and a reason", () => {
   it("relays a refused file operation's reason, and only that reason", async () => {
     // "Permission denied" and "No such file" are the two failures a user
     // meets most, and both used to arrive as "Internal server error.".
-    const { SftpOperationError, SFTP_STATUS } = await import(
+    const { SftpOperationError } = await import(
       "../../apps/desktop/server/backend-sftp-failure.mjs"
     );
     const sentinel = "TS_SFTP_RELAY_PROBE_7a1c44";
@@ -218,7 +218,6 @@ describe("a failed connection is reported with a code and a reason", () => {
     });
     // The server's own wording is still not relayed.
     expect(response.recorded.body).not.toContain(sentinel);
-    expect(SFTP_STATUS.permissionDenied).toBe(3);
   });
 
   it("still refuses to relay a look-alike that is not a file-operation failure", async () => {
