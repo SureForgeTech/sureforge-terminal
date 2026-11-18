@@ -6,6 +6,7 @@ import {
   SFTP_UPLOAD_TIMEOUT_MS,
 } from "./backend-deadline.mjs";
 import { resolveRemotePath, sanitizeFilename } from "./backend-paths.mjs";
+import { sftpOperationFailure } from "./backend-sftp-failure.mjs";
 
 const FILE_TYPE_MASK = 0o170000;
 const DIRECTORY_TYPE = 0o040000;
@@ -50,7 +51,7 @@ export function createSftpOperations({ withSftp }) {
       const entries = await new Promise((resolve, reject) => {
         sftp.readdir(targetPath, (error, list) => {
           if (error) {
-            reject(error);
+            reject(sftpOperationFailure(error));
             return;
           }
 
@@ -89,7 +90,7 @@ export function createSftpOperations({ withSftp }) {
       await new Promise((resolve, reject) => {
         sftp.mkdir(targetPath, (error) => {
           if (error) {
-            reject(error);
+            reject(sftpOperationFailure(error));
             return;
           }
 
@@ -109,7 +110,7 @@ export function createSftpOperations({ withSftp }) {
       await new Promise((resolve, reject) => {
         sftp.rename(sourcePath, targetPath, (error) => {
           if (error) {
-            reject(error);
+            reject(sftpOperationFailure(error));
             return;
           }
 
@@ -128,7 +129,7 @@ export function createSftpOperations({ withSftp }) {
       await new Promise((resolve, reject) => {
         const done = (error) => {
           if (error) {
-            reject(error);
+            reject(sftpOperationFailure(error));
             return;
           }
 
@@ -154,7 +155,7 @@ export function createSftpOperations({ withSftp }) {
       const handle = await new Promise((resolve, reject) => {
         sftp.open(targetPath, "w", (error, nextHandle) => {
           if (error) {
-            reject(error);
+            reject(sftpOperationFailure(error));
             return;
           }
 
@@ -178,7 +179,7 @@ export function createSftpOperations({ withSftp }) {
         await new Promise((resolve, reject) => {
           sftp.write(handle, buffer, 0, buffer.length, 0, (error) => {
             if (error) {
-              reject(error);
+              reject(sftpOperationFailure(error));
               return;
             }
 
@@ -220,7 +221,7 @@ export function createSftpOperations({ withSftp }) {
         const fileStats = await new Promise((resolve, reject) => {
           sftp.stat(targetPath, (error, stats) => {
             if (error) {
-              reject(error);
+              reject(sftpOperationFailure(error));
               return;
             }
 

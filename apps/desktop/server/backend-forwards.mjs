@@ -1,13 +1,34 @@
 import { randomUUID } from "node:crypto";
 import { connect as connectNet, createServer as createNetServer } from "node:net";
 
+/**
+ * A forward request the backend refused.
+ *
+ * Its message is fixed text about the request — which port is wrong — so the
+ * user can see what to change. It is a typed error because `respondError`
+ * rebuilds every other message as "Internal server error.", which is no help
+ * to someone who mistyped a port number.
+ */
+export class InvalidForwardRequestError extends Error {
+  constructor(message, statusCode = 400) {
+    super(message);
+    this.name = "InvalidForwardRequestError";
+    // 400 by default: the request itself was wrong, and a retry of the same
+    // request would be refused the same way. A caller that has a different
+    // reason passes its own status.
+    this.statusCode = statusCode;
+  }
+}
+
 export function validateForwardPorts({ direction, localPort, remotePort }) {
   for (const [label, port, bind] of [
     ["Local", localPort, direction === "local"],
     ["Remote", remotePort, direction === "remote"],
   ]) {
     if (!Number.isInteger(port) || port < (bind ? 0 : 1) || port > 65535) {
-      throw new Error(`${label} ${bind ? "bind" : "destination"} port must be ${bind ? "0 (automatic) or " : ""}1-65535`);
+      throw new InvalidForwardRequestError(
+        `${label} ${bind ? "bind" : "destination"} port must be ${bind ? "0 (automatic) or " : ""}1-65535`
+      );
     }
   }
 }
@@ -82,7 +103,10 @@ export function createForwardOperations({ sessions, forwards }) {
     validateForwardPorts({ direction: "local", localPort, remotePort });
     const session = sessions.get(sessionId);
     if (!session) {
-      throw new Error("Session not found");
+      throw new InvalidForwardRequestError(
+        "That session is no longer open, so the forward cannot be created.",
+        404
+      );
     }
 
     const sockets = new Set();
@@ -145,7 +169,10 @@ export function createForwardOperations({ sessions, forwards }) {
     validateForwardPorts({ direction: "remote", localPort, remotePort });
     const session = sessions.get(sessionId);
     if (!session) {
-      throw new Error("Session not found");
+      throw new InvalidForwardRequestError(
+        "That session is no longer open, so the forward cannot be created.",
+        404
+      );
     }
 
     const forward = {

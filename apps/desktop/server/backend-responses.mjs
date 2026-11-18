@@ -8,6 +8,8 @@ import { HostKeyRejectedError } from "./backend-host-keys.mjs";
 import { InvalidHostError } from "./backend-host-validation.mjs";
 import { SshAuthRefusedError } from "./backend-ssh-auth.mjs";
 import { SshConnectError } from "./backend-ssh-failure.mjs";
+import { SftpOperationError } from "./backend-sftp-failure.mjs";
+import { InvalidForwardRequestError } from "./backend-forwards.mjs";
 
 /**
  * #230: raw errors are published here instead of logged. A subscriber attached
@@ -103,6 +105,19 @@ export function respondError(response, error, status = 500) {
   // already sends (a typed { code, message } — see src-tauri/src/ipc_error.rs).
   // Without it every failed connection reads as "Internal server error.".
   if (error instanceof SshConnectError) {
+    message = error.message;
+  }
+
+  // A file operation the server refused: "permission denied" and "no such
+  // file" are the two a user meets most, and both used to arrive as
+  // "Internal server error.".
+  if (error instanceof SftpOperationError) {
+    message = error.message;
+  }
+
+  // A forward request that was refused — a mistyped port, say. The message
+  // says which port is wrong, which is the whole point of refusing it.
+  if (error instanceof InvalidForwardRequestError) {
     message = error.message;
   }
 
