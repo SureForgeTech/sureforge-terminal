@@ -16,6 +16,8 @@ import {
   type SplitDirection,
 } from "../types/session";
 import { closeSession } from "../lib/backend-runtime";
+import { redactSecrets } from "../lib/redact-secrets";
+import { useAppStore } from "./app-store";
 
 /**
  * Tear down the live backend session behind every pane in `paneIds` (best
@@ -780,8 +782,20 @@ export const useSessionsStore = create<SessionsState>()(
         set(nextState);
         return nextState.commandHistory[0]?.id;
       },
-      appendCommandOutput: (entryId, output) =>
-        set((state) => appendPaneCommandHistoryOutput(state, entryId, output)),
+      appendCommandOutput: (entryId, output) => {
+        // The preview is persisted with the history, so a secret printed by a
+        // command would sit in local storage until the history was cleared.
+        // The command itself is NOT redacted: the history replays it into a
+        // session, and a redacted command would run as something else.
+        const redact = useAppStore.getState().redactCommandOutput;
+        set((state) =>
+          appendPaneCommandHistoryOutput(
+            state,
+            entryId,
+            redact ? redactSecrets(output) : output
+          )
+        );
+      },
       clearCommandHistory: () => set(() => ({ commandHistory: [] })),
       queueCommandForHosts: (hosts, command, label) => {
         const paneIds: string[] = [];

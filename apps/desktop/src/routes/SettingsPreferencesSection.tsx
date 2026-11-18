@@ -22,6 +22,8 @@ export function SettingsPreferencesSection() {
   const terminalThemeOptions = listTerminalThemeOptions();
   const terminalScreenReaderMode = useAppStore((state) => state.terminalScreenReaderMode);
   const setTerminalScreenReaderMode = useAppStore((state) => state.setTerminalScreenReaderMode);
+  const redactCommandOutput = useAppStore((state) => state.redactCommandOutput);
+  const setRedactCommandOutput = useAppStore((state) => state.setRedactCommandOutput);
   // T17-T20 polish toggles.
   const appShellTheme = useAppStore((state) => state.appShellTheme);
   const setAppShellTheme = useAppStore((state) => state.setAppShellTheme);
@@ -104,6 +106,35 @@ export function SettingsPreferencesSection() {
                 Lets screen readers read terminal output, including in terminals already open. It
                 uses more memory and can slow very busy output, so it is off by default.
               </p>
+
+              <div className="mt-4 rounded-[16px] border border-slate-800 bg-slate-900/60 p-3">
+                <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                  Session history
+                </p>
+                <button
+                  type="button"
+                  aria-pressed={redactCommandOutput}
+                  onClick={() => setRedactCommandOutput(!redactCommandOutput)}
+                  className={cn(
+                    "mt-2 inline-flex items-center gap-2 rounded-[14px] border px-3 py-2 text-sm transition",
+                    redactCommandOutput
+                      ? "border-emerald-400/50 bg-emerald-400/10 text-emerald-100"
+                      : "border-slate-800 bg-slate-950/70 text-slate-300 hover:border-slate-700 hover:text-white"
+                  )}
+                >
+                  <span>
+                    {redactCommandOutput
+                      ? "Redact secrets in command output on"
+                      : "Redact secrets in command output off"}
+                  </span>
+                </button>
+                <p className="mt-2 text-sm leading-5 text-slate-300">
+                  The session history keeps a preview of what each command printed, and that preview
+                  is saved across restarts. With this on, a password, a token or an API key in the
+                  output is replaced before it is kept, so the history stays useful without keeping
+                  the secret.
+                </p>
+              </div>
             </div>
 
             <div className="rounded-[16px] border border-slate-800 bg-slate-900/60 p-3">

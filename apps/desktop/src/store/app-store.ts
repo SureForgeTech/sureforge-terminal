@@ -26,6 +26,14 @@ interface AppState {
   terminalTheme: TerminalThemeName;
   /** #510: xterm's screenReaderMode for every terminal. Off by default. */
   terminalScreenReaderMode: boolean;
+  /**
+   * Mask the secrets in the command output the session history keeps.
+   *
+   * The history persists a preview of what a command printed, and a command
+   * that prints a token leaves it in the local storage the history is written
+   * to. On by default: the preview is evidence, and the secret is not.
+   */
+  redactCommandOutput: boolean;
   vaultId: string;
   deviceId: string;
   lastAppliedSnapshotId: string | null;
@@ -64,6 +72,7 @@ interface AppState {
   setDemoModeEnabled: (enabled: boolean) => void;
   setTerminalTheme: (theme: TerminalThemeName) => void;
   setTerminalScreenReaderMode: (enabled: boolean) => void;
+  setRedactCommandOutput: (enabled: boolean) => void;
   setVaultId: (vaultId: string) => void;
   setLastAppliedSnapshotId: (snapshotId: string | null) => void;
   markImportCalloutSeen: () => void;
@@ -95,6 +104,14 @@ interface PersistedAppState {
   terminalTheme: TerminalThemeName;
   /** #510: xterm's screenReaderMode for every terminal. Off by default. */
   terminalScreenReaderMode: boolean;
+  /**
+   * Mask the secrets in the command output the session history keeps.
+   *
+   * The history persists a preview of what a command printed, and a command
+   * that prints a token leaves it in the local storage the history is written
+   * to. On by default: the preview is evidence, and the secret is not.
+   */
+  redactCommandOutput: boolean;
   vaultId: string;
   deviceId: string;
   lastAppliedSnapshotId: string | null;
@@ -134,6 +151,9 @@ export function buildBaselineDefaults(state: Partial<PersistedAppState>): Persis
     demoModeEnabled: state.demoModeEnabled ?? getDefaultDemoModeEnabled(),
     terminalTheme: safeTerminalTheme,
     terminalScreenReaderMode: state.terminalScreenReaderMode ?? false,
+    // On by default: the output preview is evidence, and a secret in it is
+    // not something the history should keep.
+    redactCommandOutput: state.redactCommandOutput ?? true,
     vaultId: state.vaultId ?? createPersistentId(),
     deviceId: state.deviceId ?? createPersistentId(),
     lastAppliedSnapshotId: state.lastAppliedSnapshotId ?? null,
@@ -203,6 +223,7 @@ export const useAppStore = create<AppState>()(
       demoModeEnabled: getDefaultDemoModeEnabled(),
       terminalTheme: DEFAULT_TERMINAL_THEME,
       terminalScreenReaderMode: false,
+      redactCommandOutput: true,
       vaultId: createPersistentId(),
       deviceId: createPersistentId(),
       lastAppliedSnapshotId: null,
@@ -227,6 +248,7 @@ export const useAppStore = create<AppState>()(
           terminalTheme: isKnownTheme(terminalTheme) ? terminalTheme : DEFAULT_TERMINAL_THEME,
         }),
       setTerminalScreenReaderMode: (terminalScreenReaderMode) => set({ terminalScreenReaderMode }),
+      setRedactCommandOutput: (redactCommandOutput) => set({ redactCommandOutput }),
       setVaultId: (vaultId) => set({ vaultId }),
       setLastAppliedSnapshotId: (lastAppliedSnapshotId) => set({ lastAppliedSnapshotId }),
       markImportCalloutSeen: () => set({ sawImportCallout: true }),
@@ -257,6 +279,7 @@ export const useAppStore = create<AppState>()(
         demoModeEnabled: state.demoModeEnabled,
         terminalTheme: state.terminalTheme,
         terminalScreenReaderMode: state.terminalScreenReaderMode,
+        redactCommandOutput: state.redactCommandOutput,
         vaultId: state.vaultId,
         deviceId: state.deviceId,
         lastAppliedSnapshotId: state.lastAppliedSnapshotId,
