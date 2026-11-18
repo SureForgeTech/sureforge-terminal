@@ -59,7 +59,8 @@ describe("#230: respondError does not relay internal error text", () => {
     // on: the difference between "the host is unreachable" and "the key
     // changed". Its message is built by the error itself from the host label
     // and a fixed explanation, so relaying it does not reopen the leak the
-    // tests above pin shut.
+    // tests above pin shut. The category travels beside it, so the client
+    // knows not to retry it.
     const response = recordingResponse();
 
     respondError(
@@ -70,7 +71,40 @@ describe("#230: respondError does not relay internal error text", () => {
     expect(response.recorded.status).toBe(403);
     expect(JSON.parse(response.recorded.body!)).toEqual({
       error: "Host key verification failed for gateway.internal:22.",
+      code: "host_key_mismatch",
     });
+  });
+
+  it("carries the category of a refused host key, so it is not retried", async () => {
+    // The wording alone does not carry the category far enough: a weak-key
+    // refusal reads as an unknown failure to the classifier, and an unknown
+    // failure IS retried — the pane keeps dialling a host whose key was
+    // refused. The category travels beside the message.
+    const { weakHostKeyMessage } = await import(
+      "../../apps/desktop/server/backend-host-keys.mjs"
+    );
+    const { classifySshError } = await import(
+      "../../apps/desktop/src/lib/ssh-error-classifier"
+    );
+    const { shouldScheduleReconnect } = await import(
+      "../../apps/desktop/src/components/terminal/connect-failure-policy"
+    );
+    const response = recordingResponse();
+
+    respondError(
+      response,
+      new HostKeyRejectedError(weakHostKeyMessage("gateway.internal", 22))
+    );
+
+    const body = JSON.parse(response.recorded.body!);
+    expect(body.code).toBe("host_key_mismatch");
+    expect(classifySshError(body).category).toBe("host_key_mismatch");
+    expect(
+      shouldScheduleReconnect(classifySshError(body).category, {
+        connectedOnce: true,
+        reconnectOnRestore: true,
+      })
+    ).toBe(false);
   });
 
   it("still refuses to relay a look-alike error that is not a host-key rejection", () => {
@@ -291,6 +325,61 @@ describe("a failed connection is reported with a code and a reason", () => {
     expect(JSON.parse(response.recorded.body!)).toEqual({
       error: "Local bind port must be 0 (automatic) or 1-65535",
     });
+  });
+
+  it("still refuses to relay a look-alike that is not a forward refusal", async () => {
+    // The exception is by TYPE. Swapping the type check for a name check
+    // would relay any impostor's text to the client.
+    const sentinel = "TS_FORWARD_LOOKALIKE_PROBE_5b8e17";
+    const impostor = Object.assign(new Error(`Local bind port must be ${sentinel}`), {
+      statusCode: 400,
+      name: "InvalidForwardRequestError",
+    });
+    const response = recordingResponse();
+
+    respondError(response, impostor);
+
+    expect(response.recorded.body).not.toContain(sentinel);
+    expect(JSON.parse(response.recorded.body!)).toEqual({ error: "Invalid request." });
+  });
+
+  it("carries the category of a refused sign-in method, so it is not retried", async () => {
+    // A refused sign-in METHOD is a configuration problem: the same request
+    // would be refused the same way, so retrying it cannot help.
+    const { SshAuthRefusedError } = await import(
+      "../../apps/desktop/server/backend-ssh-auth.mjs"
+    );
+    const { classifySshError } = await import(
+      "../../apps/desktop/src/lib/ssh-error-classifier"
+    );
+    const { shouldScheduleReconnect } = await import(
+      "../../apps/desktop/src/components/terminal/connect-failure-policy"
+    );
+    const response = recordingResponse();
+
+    respondError(
+      response,
+      new SshAuthRefusedError("This host needs a public key, but sign-in was refused.", 400)
+    );
+
+    const body = JSON.parse(response.recorded.body!);
+    expect(body.code).toBe("auth_failed");
+    expect(
+      shouldScheduleReconnect(classifySshError(body).category, {
+        connectedOnce: true,
+        reconnectOnRestore: true,
+      })
+    ).toBe(false);
+  });
+
+  it("checks the websocket failure code against the backend's own set too", async () => {
+    // The HTTP path and the websocket path have to agree about which codes
+    // may go on the wire. Source-contract test because importing backend.mjs
+    // binds a port.
+    const { readFile } = await import("node:fs/promises");
+    const source = await readFile("apps/desktop/server/backend.mjs", "utf8");
+
+    expect(source).toContain("SSH_FAILURE_CODE_VALUES.has(error?.code)");
   });
 
   it("classifies the ssh2 failures into the categories the client knows", async () => {

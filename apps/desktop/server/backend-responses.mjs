@@ -7,8 +7,7 @@ import { PayloadTooLargeError } from "./backend-buffers.mjs";
 import { HostKeyRejectedError } from "./backend-host-keys.mjs";
 import { InvalidHostError } from "./backend-host-validation.mjs";
 import { SshAuthRefusedError } from "./backend-ssh-auth.mjs";
-import { SshConnectError, SSH_FAILURE_CODE_VALUES } from "./backend-ssh-failure.mjs";
-import { SftpOperationError } from "./backend-sftp-failure.mjs";
+import { SshConnectError, SSH_FAILURE_CODE_VALUES } from "./backend-ssh-failure.mjs";import { SftpOperationError } from "./backend-sftp-failure.mjs";
 import { InvalidForwardRequestError } from "./backend-forwards.mjs";
 
 /**
@@ -65,19 +64,35 @@ export function respondError(response, error, status = 500) {
       ? "Invalid request."
       : "Internal server error.";
 
-  // The one exception besides the size limit: a refused host key. Its message
-  // is built by the error itself from the host label and a fixed explanation,
-  // so relaying it does not reopen the hole the deny-by-default rule above
-  // closes — no arbitrary error text is passed through, only this one type's
-  // own. Without it the user sees "Internal server error." for a host whose
-  // key changed, which is the one case they have to act on.
-  if (error instanceof HostKeyRejectedError) {
-    message = error.message;
-  }
-
-  // #473: a refused sign-in method or agent forwarding. Fixed text only (see
-  // SshAuthRefusedError), and it tells the user which host setting to change.
-  if (error instanceof SshAuthRefusedError) {
+  // The types whose own text may be relayed. Each one is built by this
+  // codebase from fixed text and a trusted label — never from the rejected
+  // value, never from anything the caller supplied, never from a library's
+  // own wording — so relaying it does not reopen the hole the deny-by-default
+  // rule above closes.
+  //
+  // They are the failures whose reason the user has to act on:
+  //
+  // - a refused host key: the difference between "the host is unreachable"
+  //   and "the key changed" (and, pre-authentication, no credentials were
+  //   sent);
+  // - a refused sign-in method or agent forwarding, which tells the user
+  //   which host setting to change (#473);
+  // - a rejected host request, which says what was wrong with the request;
+  // - a failed connection, which is what the native shell already sends as a
+  //   typed { code, message } (see src-tauri/src/ipc_error.rs);
+  // - a refused file operation, where "permission denied" and "no such file"
+  //   are the two a user meets most;
+  // - a refused forward request, which names the port that is wrong.
+  const RELAYED_TYPES = [
+    HostKeyRejectedError,
+    SshAuthRefusedError,
+    InvalidHostError,
+    SshConnectError,
+    SftpOperationError,
+    InvalidForwardRequestError,
+  ];
+  const isRelayedType = RELAYED_TYPES.some((type) => error instanceof type);
+  if (isRelayedType) {
     message = error.message;
   }
 
@@ -92,45 +107,13 @@ export function respondError(response, error, status = 500) {
     message = `Request body exceeds the ${error.limit}-byte limit.`;
   }
 
-  // The other exception: InvalidHostError is only ever constructed by this
-  // codebase with a static message — never the rejected value, never anything
-  // the caller supplied — so relaying it tells the caller what was wrong
-  // without opening the path #230 closed.
-  if (error instanceof InvalidHostError) {
-    message = error.message;
-  }
-
-  // The same exception for a failed connection: the reason a host could not
-  // be reached is the reason the user needs, and it is what the native shell
-  // already sends (a typed { code, message } — see src-tauri/src/ipc_error.rs).
-  // Without it every failed connection reads as "Internal server error.".
-  if (error instanceof SshConnectError) {
-    message = error.message;
-  }
-
-  // A file operation the server refused: "permission denied" and "no such
-  // file" are the two a user meets most, and both used to arrive as
-  // "Internal server error.".
-  if (error instanceof SftpOperationError) {
-    message = error.message;
-  }
-
-  // A forward request that was refused — a mistyped port, say. The message
-  // says which port is wrong, which is the whole point of refusing it.
-  if (error instanceof InvalidForwardRequestError) {
-    message = error.message;
-  }
-
-  // A typed failure carries its code alongside the message, so the client can
-  // categorise it (and must not retry a refused sign-in) without reading the
-  // text. The code is one of a fixed set the backend chose, never text from
-  // the error — so it is checked against that set here, the same way the
-  // websocket path checks it. A code the backend did not choose is dropped
-  // rather than put on the wire.
+  // A typed failure carries its category alongside the message, so the client
+  // can classify it (and must not retry a refused sign-in or a changed host
+  // key) without reading the text. The category travels only with a relayed
+  // message, and only when it is one of a fixed set the backend chose — never
+  // text from the error. The same check the websocket path makes.
   const code =
-    error instanceof SshConnectError && SSH_FAILURE_CODE_VALUES.has(error.code)
-      ? error.code
-      : undefined;
+    isRelayedType && SSH_FAILURE_CODE_VALUES.has(error?.code) ? error.code : undefined;
 
   sendJson(response, statusCode, code ? { error: message, code } : { error: message });
 }

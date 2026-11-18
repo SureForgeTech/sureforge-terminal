@@ -1,0 +1,1 @@
+- [FIX] Browser mode: a refused host key and a refused sign-in method now carry their category beside the message, so a host whose key was refused is not dialled again and again, and a sign-in the backend was told not to use is not retried.

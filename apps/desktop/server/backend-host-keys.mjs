@@ -55,6 +55,7 @@ import { constants } from "node:fs";
 import { chmod, mkdir, open, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { SSH_FAILURE_CODES } from "./backend-failure-codes.mjs";
 
 /** The bundle identifier, so the browser backend and the native app agree. */
 const APP_IDENTIFIER = "com.abdenterprises.terminalworkspace";
@@ -316,6 +317,12 @@ export class HostKeyRejectedError extends Error {
     // 403, not 500: the request was refused on purpose, and the caller did
     // nothing wrong that a retry would fix.
     this.statusCode = 403;
+    // The category the client branches on. A refused host key — the key
+    // changed, or the key is too weak to trust — is the machine-in-the-middle
+    // signal, and the renderer's retry policy must not retry it. The wording
+    // alone does not carry that far: a weak-key refusal reads as an unknown
+    // failure, and an unknown failure IS retried.
+    this.code = SSH_FAILURE_CODES.hostKeyMismatch;
     // ssh2 reports a denied host key as a handshake-level error, and the
     // failure-stage mapping keys off that level. Keeping it means the
     // command path still classifies this as a host-key failure.

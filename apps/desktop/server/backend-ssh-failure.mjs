@@ -28,34 +28,21 @@ import { HostKeyRejectedError, safeHostLabel } from "./backend-host-keys.mjs";
 import { InvalidHostError } from "./backend-host-validation.mjs";
 import { SshAuthRefusedError } from "./backend-ssh-auth.mjs";
 import { OperationTimeoutError } from "./backend-deadline.mjs";
+import { SSH_FAILURE_CODES } from "./backend-failure-codes.mjs";
+
+// The codes live in a leaf module of their own, because the host-key and
+// sign-in refusals need them too and those modules are imported here.
+// Re-exported so callers can keep importing them from one place.
+export { SSH_FAILURE_CODES, SSH_FAILURE_CODE_VALUES } from "./backend-failure-codes.mjs";
 
 /**
  * The failure codes the frontend classifier knows.
  *
- * These are the names `apps/desktop/src/lib/ssh-error-classifier.ts` accepts
- * and the ones `src-tauri/src/ipc_error.rs` serialises, so a browser-mode
- * failure and a native-mode failure of the same kind are categorised the same
- * way. `internal` is the classifier's catch-all and is deliberately NOT a
- * category it acts on: it falls back to the prose rules.
+ * Defined in `backend-failure-codes.mjs` and re-exported here: see that file
+ * for why they live apart, and for the names themselves. `internal` is the
+ * classifier's catch-all and is deliberately NOT a category it acts on: it
+ * falls back to the prose rules.
  */
-export const SSH_FAILURE_CODES = Object.freeze({
-  authFailed: "auth_failed",
-  hostKeyMismatch: "host_key_mismatch",
-  networkUnreachable: "network_unreachable",
-  timeout: "timeout",
-  refused: "refused",
-  dnsFailure: "dns_failure",
-  internal: "internal",
-});
-
-/**
- * The codes this backend is willing to put on the wire.
- *
- * An error can carry any `code` property — a Node error code, say — and
- * relaying an arbitrary one would put text on the wire that this backend
- * never chose. Only a category the client knows is relayed.
- */
-export const SSH_FAILURE_CODE_VALUES = new Set(Object.values(SSH_FAILURE_CODES));
 
 /**
  * A connection that failed for a reason the user can act on.
