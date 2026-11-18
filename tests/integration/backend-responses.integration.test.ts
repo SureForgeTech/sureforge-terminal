@@ -243,7 +243,6 @@ describe("a failed connection is reported with a code and a reason", () => {
     const { InvalidForwardRequestError } = await import(
       "../../apps/desktop/server/backend-forwards.mjs"
     );
-    const sentinel = "TS_FORWARD_RELAY_PROBE_2f6b70";
     const response = recordingResponse();
 
     respondError(
@@ -255,7 +254,6 @@ describe("a failed connection is reported with a code and a reason", () => {
     expect(JSON.parse(response.recorded.body!)).toEqual({
       error: "Local bind port must be 0 (automatic) or 1-65535",
     });
-    expect(response.recorded.body).not.toContain(sentinel);
   });
 
   it("classifies the ssh2 failures into the categories the client knows", async () => {

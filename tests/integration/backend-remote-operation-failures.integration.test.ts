@@ -163,6 +163,26 @@ describe("a refused forward request", () => {
         },
       },
       {
+        name: "uploading a file whose close fails",
+        run: (ops: ReturnType<typeof createSftpOperations>) =>
+          ops.uploadRemoteFile({ hostname: "gateway.internal", port: 22 }, "/etc/a", "aGk="),
+        sftp: {
+          // The write succeeds and the close fails: the close is reported on
+          // its own, since there is no earlier reason to report.
+          open: (_path: string, _mode: string, cb: (error: Error, handle?: unknown) => void) =>
+            cb(undefined, Buffer.from("handle")),
+          write: (
+            _handle: unknown,
+            _buffer: unknown,
+            _offset: number,
+            _length: number,
+            _position: number,
+            cb: (error: Error) => void
+          ) => cb(undefined),
+          close: (_handle: unknown, cb: (error?: Error) => void) => cb(denied()),
+        },
+      },
+      {
         name: "downloading a file",
         run: (ops: ReturnType<typeof createSftpOperations>) =>
           ops.sendRemoteFile(
