@@ -8,6 +8,13 @@ import {
   isKnownTheme,
   type TerminalThemeName,
 } from "../lib/terminal-themes";
+import {
+  DEFAULT_TERMINAL_FONT,
+  DEFAULT_TERMINAL_FONT_SIZE,
+  isKnownTerminalFont,
+  resolveTerminalFontSize,
+  type TerminalFontName,
+} from "../lib/terminal-fonts";
 
 type WorkspaceDensity = "compact" | "comfortable";
 /**
@@ -24,6 +31,13 @@ interface AppState {
   sectionShortcutsEnabled: boolean;
   demoModeEnabled: boolean;
   terminalTheme: TerminalThemeName;
+  /**
+   * The terminal's font family and size. The parity matrix named the font
+   * picker as the last of the shell-preference gaps: the terminal had one
+   * hard-coded family and one hard-coded size.
+   */
+  terminalFont: TerminalFontName;
+  terminalFontSize: number;
   /** #510: xterm's screenReaderMode for every terminal. Off by default. */
   terminalScreenReaderMode: boolean;
   /**
@@ -71,6 +85,8 @@ interface AppState {
   setSectionShortcutsEnabled: (enabled: boolean) => void;
   setDemoModeEnabled: (enabled: boolean) => void;
   setTerminalTheme: (theme: TerminalThemeName) => void;
+  setTerminalFont: (font: TerminalFontName) => void;
+  setTerminalFontSize: (size: number) => void;
   setTerminalScreenReaderMode: (enabled: boolean) => void;
   setRedactCommandOutput: (enabled: boolean) => void;
   setVaultId: (vaultId: string) => void;
@@ -102,6 +118,13 @@ interface PersistedAppState {
   sectionShortcutsEnabled: boolean;
   workspaceDensity: WorkspaceDensity;
   terminalTheme: TerminalThemeName;
+  /**
+   * The terminal's font family and size. The parity matrix named the font
+   * picker as the last of the shell-preference gaps: the terminal had one
+   * hard-coded family and one hard-coded size.
+   */
+  terminalFont: TerminalFontName;
+  terminalFontSize: number;
   /** #510: xterm's screenReaderMode for every terminal. Off by default. */
   terminalScreenReaderMode: boolean;
   /**
@@ -150,6 +173,8 @@ export function buildBaselineDefaults(state: Partial<PersistedAppState>): Persis
     sectionShortcutsEnabled: state.sectionShortcutsEnabled ?? true,
     demoModeEnabled: state.demoModeEnabled ?? getDefaultDemoModeEnabled(),
     terminalTheme: safeTerminalTheme,
+    terminalFont: isKnownTerminalFont(state.terminalFont) ? state.terminalFont : DEFAULT_TERMINAL_FONT,
+    terminalFontSize: resolveTerminalFontSize(state.terminalFontSize ?? DEFAULT_TERMINAL_FONT_SIZE),
     terminalScreenReaderMode: state.terminalScreenReaderMode ?? false,
     // On by default: the output preview is evidence, and a secret in it is
     // not something the history should keep.
@@ -222,6 +247,8 @@ export const useAppStore = create<AppState>()(
       sectionShortcutsEnabled: true,
       demoModeEnabled: getDefaultDemoModeEnabled(),
       terminalTheme: DEFAULT_TERMINAL_THEME,
+      terminalFont: DEFAULT_TERMINAL_FONT,
+      terminalFontSize: DEFAULT_TERMINAL_FONT_SIZE,
       terminalScreenReaderMode: false,
       redactCommandOutput: true,
       vaultId: createPersistentId(),
@@ -247,6 +274,9 @@ export const useAppStore = create<AppState>()(
         set({
           terminalTheme: isKnownTheme(terminalTheme) ? terminalTheme : DEFAULT_TERMINAL_THEME,
         }),
+      setTerminalFont: (terminalFont) =>
+        set({ terminalFont: isKnownTerminalFont(terminalFont) ? terminalFont : DEFAULT_TERMINAL_FONT }),
+      setTerminalFontSize: (terminalFontSize) => set({ terminalFontSize: resolveTerminalFontSize(terminalFontSize) }),
       setTerminalScreenReaderMode: (terminalScreenReaderMode) => set({ terminalScreenReaderMode }),
       setRedactCommandOutput: (redactCommandOutput) => set({ redactCommandOutput }),
       setVaultId: (vaultId) => set({ vaultId }),
@@ -278,6 +308,8 @@ export const useAppStore = create<AppState>()(
         sectionShortcutsEnabled: state.sectionShortcutsEnabled,
         demoModeEnabled: state.demoModeEnabled,
         terminalTheme: state.terminalTheme,
+        terminalFont: state.terminalFont,
+        terminalFontSize: state.terminalFontSize,
         terminalScreenReaderMode: state.terminalScreenReaderMode,
         redactCommandOutput: state.redactCommandOutput,
         vaultId: state.vaultId,

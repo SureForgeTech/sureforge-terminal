@@ -54,6 +54,9 @@ interface TerminalPaneLifecycleOptions {
   hostname: HostRecord["hostname"];
   id: HostRecord["id"];
   initialPaletteRef: MutableRefObject<TerminalAnsiPalette>;
+  /** The terminal's font family and size, from the font picker. */
+  terminalFontStack: string;
+  terminalFontSize: number;
   intentionalDisconnectRef: MutableRefObject<boolean>;
   label: HostRecord["label"];
   nativeBridgeEnabled: boolean;
@@ -114,6 +117,8 @@ export function useTerminalPaneLifecycle({
   hostname,
   id,
   initialPaletteRef,
+  terminalFontStack,
+  terminalFontSize,
   intentionalDisconnectRef,
   label,
   nativeBridgeEnabled,
@@ -165,8 +170,8 @@ export function useTerminalPaneLifecycle({
 
     const terminal = new Terminal({
       cursorBlink: true,
-      fontFamily: '"SFMono-Regular", "Menlo", "Monaco", monospace',
-      fontSize: 13,
+      fontFamily: terminalFontStack,
+      fontSize: terminalFontSize,
       scrollback: 10000,
       theme: initialPaletteRef.current,
       // #510: a terminal recreated after a host change starts in the right

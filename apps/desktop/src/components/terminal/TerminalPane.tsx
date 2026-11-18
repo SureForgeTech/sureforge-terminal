@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import "xterm/css/xterm.css";
 import { detectSystemColorScheme, resolveTerminalTheme, type TerminalThemeMode } from "../../lib/terminal-themes";
+import { resolveTerminalFontStack, resolveTerminalFontSize } from "../../lib/terminal-fonts";
 import { cn, formatHostAddress } from "../../lib/utils";
 import { useAppStore } from "../../store/app-store";
 import { useSessionsStore } from "../../store/sessions-store";
@@ -25,6 +26,19 @@ interface TerminalPaneProps {
 
 export function TerminalPane({ host, pane, active, onActivate, onSplit, onClose }: TerminalPaneProps) {
   const terminalThemeName = useAppStore((state) => state.terminalTheme);
+  // The font picker: the terminal's family and size are a preference, not a
+  // constant, so a person whose font is not on this machine — or whose
+  // screen needs a different size — can change them.
+  const terminalFontName = useAppStore((state) => state.terminalFont);
+  const terminalFontSizePreference = useAppStore((state) => state.terminalFontSize);
+  const terminalFontStack = useMemo(
+    () => resolveTerminalFontStack(terminalFontName),
+    [terminalFontName]
+  );
+  const terminalFontSize = useMemo(
+    () => resolveTerminalFontSize(terminalFontSizePreference),
+    [terminalFontSizePreference]
+  );
   const setPanePersistOutputPreview = useSessionsStore((state) => state.setPanePersistOutputPreview);
   const [systemColorScheme, setSystemColorScheme] = useState<TerminalThemeMode>(() => detectSystemColorScheme());
 
@@ -44,7 +58,7 @@ export function TerminalPane({ host, pane, active, onActivate, onSplit, onClose 
     () => resolveTerminalTheme(terminalThemeName, systemColorScheme).entry.palette,
     [terminalThemeName, systemColorScheme]
   );
-  const { advanceSearchMatch, clipboardNoticeRef, screenReaderModeRef, closeSearch, containerRef, contextMenuRequestRef, runtimeStatusMessage, searchActiveIndex, searchCaseSensitive, searchInputRef, searchMatches, searchOpen, searchQuery, setSearchCaseSensitive, setSearchQuery, terminalRef, toggleConnectionRef } = useTerminalPaneSession({ host, pane, resolvedTerminalPalette });
+  const { advanceSearchMatch, clipboardNoticeRef, screenReaderModeRef, closeSearch, containerRef, contextMenuRequestRef, runtimeStatusMessage, searchActiveIndex, searchCaseSensitive, searchInputRef, searchMatches, searchOpen, searchQuery, setSearchCaseSensitive, setSearchQuery, terminalRef, toggleConnectionRef } = useTerminalPaneSession({ host, pane, resolvedTerminalPalette, terminalFontStack, terminalFontSize });
 
   // #510: screen reader support. The setting reaches open terminals, and
   // connection changes in the active pane are announced once each.

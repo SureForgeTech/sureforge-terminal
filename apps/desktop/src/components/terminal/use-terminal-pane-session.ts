@@ -23,9 +23,18 @@ interface UseTerminalPaneSessionOptions {
   host: HostRecord;
   pane: SessionPane;
   resolvedTerminalPalette: TerminalAnsiPalette;
+  /** The terminal's font family and size, from the font picker. */
+  terminalFontStack: string;
+  terminalFontSize: number;
 }
 
-export function useTerminalPaneSession({ host, pane, resolvedTerminalPalette }: UseTerminalPaneSessionOptions) {
+export function useTerminalPaneSession({
+  host,
+  pane,
+  resolvedTerminalPalette,
+  terminalFontStack,
+  terminalFontSize,
+}: UseTerminalPaneSessionOptions) {
   const {
     agentForwarding,
     authMethod,
@@ -164,6 +173,19 @@ export function useTerminalPaneSession({ host, pane, resolvedTerminalPalette }: 
     terminal.options.theme = resolvedTerminalPalette;
   }, [resolvedTerminalPalette]);
 
+  // The same for the font: a terminal that is already open follows the
+  // preference, rather than keeping the font it started with until the pane
+  // is recreated. Setting `fontFamily` / `fontSize` on the options is the
+  // supported xterm.js path and keeps the scrollback and the SSH session.
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal) {
+      return;
+    }
+    terminal.options.fontFamily = terminalFontStack;
+    terminal.options.fontSize = terminalFontSize;
+  }, [terminalFontStack, terminalFontSize]);
+
   useTerminalPaneLifecycle({
     activeHistoryEntryIdRef,
     agentForwarding,
@@ -189,6 +211,8 @@ export function useTerminalPaneSession({ host, pane, resolvedTerminalPalette }: 
     hostname,
     id,
     initialPaletteRef,
+    terminalFontStack,
+    terminalFontSize,
     intentionalDisconnectRef,
     label,
     nativeBridgeEnabled,

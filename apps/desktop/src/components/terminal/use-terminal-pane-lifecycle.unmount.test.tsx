@@ -140,6 +140,8 @@ describe("useTerminalPaneLifecycle unmount", () => {
         hostname: host.hostname,
         id: host.id,
         initialPaletteRef: ref({} as never),
+        terminalFontStack: '"SFMono-Regular", "Menlo", "Monaco", monospace',
+        terminalFontSize: 13,
         intentionalDisconnectRef: ref(false),
         label: host.label,
         nativeBridgeEnabled: false,
