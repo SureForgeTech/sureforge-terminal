@@ -7,7 +7,7 @@ import { PayloadTooLargeError } from "./backend-buffers.mjs";
 import { HostKeyRejectedError } from "./backend-host-keys.mjs";
 import { InvalidHostError } from "./backend-host-validation.mjs";
 import { SshAuthRefusedError } from "./backend-ssh-auth.mjs";
-import { SshConnectError } from "./backend-ssh-failure.mjs";
+import { SshConnectError, SSH_FAILURE_CODE_VALUES } from "./backend-ssh-failure.mjs";
 import { SftpOperationError } from "./backend-sftp-failure.mjs";
 import { InvalidForwardRequestError } from "./backend-forwards.mjs";
 
@@ -124,8 +124,13 @@ export function respondError(response, error, status = 500) {
   // A typed failure carries its code alongside the message, so the client can
   // categorise it (and must not retry a refused sign-in) without reading the
   // text. The code is one of a fixed set the backend chose, never text from
-  // the error.
-  const code = error instanceof SshConnectError ? error.code : undefined;
+  // the error — so it is checked against that set here, the same way the
+  // websocket path checks it. A code the backend did not choose is dropped
+  // rather than put on the wire.
+  const code =
+    error instanceof SshConnectError && SSH_FAILURE_CODE_VALUES.has(error.code)
+      ? error.code
+      : undefined;
 
   sendJson(response, statusCode, code ? { error: message, code } : { error: message });
 }

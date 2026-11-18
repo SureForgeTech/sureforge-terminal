@@ -195,6 +195,43 @@ describe("a failed connection is reported with a code and a reason", () => {
     expect(JSON.parse(response.recorded.body!)).toEqual({ error: "Internal server error." });
   });
 
+  it("drops a failure code that is not one of the backend's own", async () => {
+    // The code is a category the client branches on, so it has to be one the
+    // backend chose. The websocket path checks the code against that set; the
+    // HTTP path has to check it the same way, or a future call site could put
+    // an arbitrary string on the wire.
+    const { SshConnectError } = await import("../../apps/desktop/server/backend-ssh-failure.mjs");
+    const response = recordingResponse();
+
+    respondError(
+      response,
+      new SshConnectError("The host refused the sign-in.", { code: "something-else" })
+    );
+
+    expect(JSON.parse(response.recorded.body!)).toEqual({
+      error: "The host refused the sign-in.",
+    });
+  });
+
+  it("keeps a failure code that is one of the backend's own", async () => {
+    const { SshConnectError, SSH_FAILURE_CODES } = await import(
+      "../../apps/desktop/server/backend-ssh-failure.mjs"
+    );
+    const response = recordingResponse();
+
+    respondError(
+      response,
+      new SshConnectError("The host refused the sign-in.", {
+        code: SSH_FAILURE_CODES.authFailed,
+      })
+    );
+
+    expect(JSON.parse(response.recorded.body!)).toEqual({
+      error: "The host refused the sign-in.",
+      code: "auth_failed",
+    });
+  });
+
   it("relays a refused file operation's reason, and only that reason", async () => {
     // "Permission denied" and "No such file" are the two failures a user
     // meets most, and both used to arrive as "Internal server error.".
