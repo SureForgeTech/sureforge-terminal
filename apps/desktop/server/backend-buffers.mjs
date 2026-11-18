@@ -181,12 +181,28 @@ export function bufferDetachedOutput(session, data, maxBytes = SESSION_BUFFER_MA
  */
 export function bufferPendingInput(session, data, maxBytes = SESSION_INPUT_MAX_BYTES) {
   const bytes = Buffer.byteLength(data, "utf8");
-  // The newest bytes do not fit: they are dropped, and what is kept is the
-  // start of what was typed.
-  if (session.pendingInputBytes + bytes > maxBytes) {
-    session.pendingInputDroppedBytes += bytes;
+  if (session.pendingInputBytes + bytes <= maxBytes) {
+    session.pendingInput.push(data);
+    session.pendingInputBytes += bytes;
     return;
   }
-  session.pendingInput.push(data);
-  session.pendingInputBytes += bytes;
+  // The chunk does not fit. Keep as much of its BEGINNING as there is room
+  // for, cut on a character boundary: a prefix waits for more input, while a
+  // suffix could be a different command.
+  const room = maxBytes - session.pendingInputBytes;
+  let kept = "";
+  let keptBytes = 0;
+  for (const character of data) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (keptBytes + size > room) {
+      break;
+    }
+    kept += character;
+    keptBytes += size;
+  }
+  if (kept) {
+    session.pendingInput.push(kept);
+    session.pendingInputBytes += keptBytes;
+  }
+  session.pendingInputDroppedBytes += bytes - keptBytes;
 }

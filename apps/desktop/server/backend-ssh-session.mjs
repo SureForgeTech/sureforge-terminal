@@ -445,6 +445,16 @@ export function createSshSessionManager({
         if (session.shellTimer) {
           clearTimeout(session.shellTimer);
           session.shellTimer = null;
+          // The connection ended before the shell opened and nothing has said
+          // why. Say so now: a bare "disconnected" leaves the user with a
+          // session that ended for no stated reason, and the timeout that
+          // used to cover this case waited 30 seconds to say less.
+          if (!session.failureMessage) {
+            failSession(
+              session,
+              new Error("The connection closed before the shell opened.")
+            );
+          }
         }
         if (session.state !== "disconnected") {
           session.state = "disconnected";

@@ -193,6 +193,10 @@ describe("createTerminalPaneNativeSessionController", () => {
     // read from it — it travels as a code beside the message. A refused
     // sign-in must not be retried: the same credentials will be refused
     // again, and repeated failed logins can lock the account.
+    //
+    // The session had connected first, so the retry policy WOULD retry it if
+    // the failure were not recognised as a refused sign-in. Without the code
+    // the failure reads as unknown — and unknown IS retried.
     createBackendSession.mockResolvedValue({ sessionId: "session-1" });
     const socket = new FakeSocket();
     openBackendSessionSocket.mockResolvedValue(socket);
@@ -200,6 +204,9 @@ describe("createTerminalPaneNativeSessionController", () => {
     const controller = makeController(setPaneState);
 
     await controller.connectNativeSession();
+    socket.dispatch("message", {
+      data: JSON.stringify({ type: "status", state: "connected" }),
+    });
     socket.dispatch("message", {
       data: JSON.stringify({
         type: "error",
@@ -219,7 +226,8 @@ describe("createTerminalPaneNativeSessionController", () => {
 
   it("retries a failure the backend reported with a retryable code", async () => {
     // The other side of the same rule: a host that could not be reached is
-    // worth another attempt, and the code is what says so.
+    // worth another attempt. This one guards against over-blocking — a code
+    // the client does not know must not stop a retry that should happen.
     createBackendSession
       .mockResolvedValueOnce({ sessionId: "session-1" })
       .mockResolvedValueOnce({ sessionId: "session-2" });
