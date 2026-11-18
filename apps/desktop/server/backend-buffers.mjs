@@ -13,6 +13,12 @@ export const SESSION_BUFFER_MAX_BYTES = 256 * 1024; // 256 KiB
  * one maximum-sized frame.
  */
 export const SESSION_INPUT_MAX_BYTES = 64 * 1024; // 64 KiB
+/**
+ * Max number of buffered input chunks. The byte cap alone does not bound the
+ * array: a client sending many one-byte frames would fill the cap with
+ * entries. This bounds the entries.
+ */
+export const SESSION_INPUT_MAX_CHUNKS = 1024;
 
 export class PayloadTooLargeError extends Error {
   constructor(limit) {
@@ -179,9 +185,22 @@ export function bufferDetachedOutput(session, data, maxBytes = SESSION_BUFFER_MA
  * `session.pendingInputBytes` and `session.pendingInputDroppedBytes` (numbers)
  * to be initialized.
  */
-export function bufferPendingInput(session, data, maxBytes = SESSION_INPUT_MAX_BYTES) {
+export function bufferPendingInput(
+  session,
+  data,
+  maxBytes = SESSION_INPUT_MAX_BYTES,
+  maxChunks = SESSION_INPUT_MAX_CHUNKS
+) {
+  // An empty frame carries nothing. Counting it would grow the array without
+  // growing the accounted bytes, so the byte cap would not bound it.
+  if (!data) {
+    return;
+  }
   const bytes = Buffer.byteLength(data, "utf8");
-  if (session.pendingInputBytes + bytes <= maxBytes) {
+  if (
+    session.pendingInputBytes + bytes <= maxBytes &&
+    session.pendingInput.length < maxChunks
+  ) {
     session.pendingInput.push(data);
     session.pendingInputBytes += bytes;
     return;
@@ -189,6 +208,10 @@ export function bufferPendingInput(session, data, maxBytes = SESSION_INPUT_MAX_B
   // The chunk does not fit. Keep as much of its BEGINNING as there is room
   // for, cut on a character boundary: a prefix waits for more input, while a
   // suffix could be a different command.
+  if (session.pendingInput.length >= maxChunks) {
+    session.pendingInputDroppedBytes += bytes;
+    return;
+  }
   const room = maxBytes - session.pendingInputBytes;
   let kept = "";
   let keptBytes = 0;

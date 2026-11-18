@@ -77,6 +77,9 @@ export function createSshSessionManager({
       clearTimeout(session.shellTimer);
       session.shellTimer = null;
     }
+    // Marked so a late callback knows the session is over: a shell that
+    // opens after the session was retired must not bring it back.
+    session.retired = true;
     try {
       await closeForwardsForSession(session.id);
     } finally {
@@ -356,8 +359,37 @@ export function createSshSessionManager({
             clearTimeout(session.shellTimer);
             session.shellTimer = null;
           }
+
+          // A callback that arrives after the session has already failed (the
+          // shell-open timeout fired) or after it was retired must not
+          // resurrect it. The user was told the session failed; making it
+          // "connected" again — and flushing the input they typed in the
+          // meantime — would run commands on a shell they were told they do
+          // not have.
+          if (session.state !== "connecting" || session.retired) {
+            discardPendingInput(session);
+            // The late stream is of no use: close it rather than leave it
+            // open on a session that is over.
+            try {
+              stream?.destroy?.();
+            } catch {
+              // The stream is already gone; nothing to do.
+            }
+            return;
+          }
+
           if (error) {
-            failSession(session, error);
+            // The reason is fixed text: ssh2's own text for a refused channel
+            // is written by the server ("Channel open failure: ..."), and the
+            // server does not get to write into the user's terminal. The raw
+            // error stays on the server as the cause.
+            failSession(
+              session,
+              new SshConnectError("The host refused to open a shell.", {
+                code: SSH_FAILURE_CODES.internal,
+                cause: error,
+              })
+            );
             // Nothing can be done with a connection whose shell was refused.
             // Ending it lets the client's close handler retire the session
             // (it used to stay open, with its session, indefinitely).
@@ -385,7 +417,26 @@ export function createSshSessionManager({
           // "connected", and the keystrokes the user typed vanished with
           // nothing on screen to say why.
           stream.on("error", (error) => {
-            failSession(session, error);
+            // Fixed text again: a stream error can carry a local path (a
+            // handle that could not be opened, say), and the terminal is not
+            // the place for one. The raw error stays on the server as the
+            // cause.
+            failSession(
+              session,
+              new SshConnectError("The connection to the host failed.", {
+                code: SSH_FAILURE_CODES.internal,
+                cause: error,
+              })
+            );
+            // The error alone leaves the connection open: the close handler
+            // is what retires the session, and an error is not always
+            // followed by a close. Ending the client triggers it.
+            try {
+              stream.destroy?.();
+            } catch {
+              // The stream is already gone.
+            }
+            session.client.end();
           });
 
           stream.on("close", async () => {
@@ -510,7 +561,8 @@ export function createSshSessionManager({
     }
   }
 
-  return {    createConnectConfig,
+  return {
+    createConnectConfig,
     openJumpSocket,
     connectClient,
     createSshSession,
@@ -548,6 +600,17 @@ export function flushPendingInput(session) {
   for (const chunk of pending) {
     session.stream.write(chunk);
   }
+}
+
+/**
+ * Throw away the input that was typed before the shell opened.
+ *
+ * Used when the session is over before the shell ever opened: the user was
+ * told it failed, and those keystrokes must not be run later.
+ */
+export function discardPendingInput(session) {
+  session.pendingInput = [];
+  session.pendingInputBytes = 0;
 }
 
 /**

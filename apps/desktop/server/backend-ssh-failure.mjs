@@ -80,6 +80,13 @@ export class SshConnectError extends Error {
  * what separates "nothing is listening" from "no route to host".
  */
 export function sshConnectFailureCode(error) {
+  // A private key that could not be parsed is ssh2's own error, thrown
+  // synchronously out of client.connect() before anything is sent. It has no
+  // level, and it is nearly always a wrong passphrase or the wrong file —
+  // either way, another attempt with the same key fails the same way.
+  if (isUnusablePrivateKeyError(error)) {
+    return SSH_FAILURE_CODES.authFailed;
+  }
   const level = error?.level;
   if (level === "client-dns") {
     return SSH_FAILURE_CODES.dnsFailure;
@@ -101,6 +108,22 @@ export function sshConnectFailureCode(error) {
     }
   }
   return SSH_FAILURE_CODES.internal;
+}
+
+/**
+ * Whether an error is ssh2 refusing to use the private key it was given.
+ *
+ * ssh2 throws these synchronously out of client.connect(): the key could not
+ * be parsed (usually a wrong passphrase), or it is not a key at all. The text
+ * is the library's own, and it is only used to RECOGNISE the failure — the
+ * message the client sees is built here, from fixed text.
+ */
+export function isUnusablePrivateKeyError(error) {
+  const message = typeof error?.message === "string" ? error.message : "";
+  return (
+    message.startsWith("Cannot parse privateKey:") ||
+    message.startsWith("privateKey value does not contain")
+  );
 }
 
 /**
@@ -139,7 +162,6 @@ export function sshConnectFailureMessage(code, label) {
       return `Could not open an SSH session with ${label}.`;
   }
 }
-
 /**
  * Turn a failed connection into the error the client is told about.
  *
@@ -165,6 +187,15 @@ export function sshConnectFailure(error, host) {
 
   const code = sshConnectFailureCode(error);
   const label = safeHostLabel(host?.hostname, host?.port);
+  // A private key that could not be read is its own reason: no sign-in was
+  // attempted, so "the host refused the sign-in" would be a lie. It is still
+  // not worth retrying with the same key.
+  if (isUnusablePrivateKeyError(error)) {
+    return new SshConnectError(
+      "The private key could not be read. Check the key path, and the passphrase if it has one.",
+      { code, cause: error, level: error?.level }
+    );
+  }
   return new SshConnectError(sshConnectFailureMessage(code, label), {
     code,
     cause: error,

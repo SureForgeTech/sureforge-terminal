@@ -322,7 +322,10 @@ export class HostKeyRejectedError extends Error {
     // signal, and the renderer's retry policy must not retry it. The wording
     // alone does not carry that far: a weak-key refusal reads as an unknown
     // failure, and an unknown failure IS retried.
-    this.code = SSH_FAILURE_CODES.hostKeyMismatch;
+    //
+    // A caller whose refusal is NOT a changed key (a store that could not be
+    // read, say) passes its own category.
+    this.code = options?.code ?? SSH_FAILURE_CODES.hostKeyMismatch;
     // ssh2 reports a denied host key as a handshake-level error, and the
     // failure-stage mapping keys off that level. Keeping it means the
     // command path still classifies this as a host-key failure.
@@ -368,9 +371,14 @@ export function createHostKeyVerifier({ hostname, port, store }) {
         // The cause carries the detail — which file, which line, which fs
         // error — for the in-process diagnostics channel. The message the
         // client sees is built from trusted data only.
+        //
+        // The category is "internal", not "host_key_mismatch": the key did
+        // not change, the store could not be read. A store that is locked by
+        // another process for a moment should be tried again, and a changed
+        // key must not be.
         failure.error = new HostKeyRejectedError(
           hostKeyVerificationFailureMessage(hostname, port),
-          { cause: error },
+          { cause: error, code: SSH_FAILURE_CODES.internal },
         );
         callback(false);
       });

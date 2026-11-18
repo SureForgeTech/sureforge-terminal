@@ -7,7 +7,8 @@ import { PayloadTooLargeError } from "./backend-buffers.mjs";
 import { HostKeyRejectedError } from "./backend-host-keys.mjs";
 import { InvalidHostError } from "./backend-host-validation.mjs";
 import { SshAuthRefusedError } from "./backend-ssh-auth.mjs";
-import { SshConnectError, SSH_FAILURE_CODE_VALUES } from "./backend-ssh-failure.mjs";import { SftpOperationError } from "./backend-sftp-failure.mjs";
+import { SshConnectError, SSH_FAILURE_CODE_VALUES } from "./backend-ssh-failure.mjs";
+import { SftpOperationError } from "./backend-sftp-failure.mjs";
 import { InvalidForwardRequestError } from "./backend-forwards.mjs";
 
 /**

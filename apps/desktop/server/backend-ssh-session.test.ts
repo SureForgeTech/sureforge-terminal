@@ -245,6 +245,30 @@ describe("backend ssh session lifecycle", () => {
     expect(source).not.toContain("pending: true");
   });
 
+  it("bounds the input it holds before the shell opens", async () => {
+    // The byte cap alone does not bound the array: an empty frame grows it
+    // without growing the accounted bytes, and a client sending many one-byte
+    // frames fills it with entries.
+    const { bufferPendingInput } = await import("./backend-buffers.mjs");
+    const session = {
+      pendingInput: [] as string[],
+      pendingInputBytes: 0,
+      pendingInputDroppedBytes: 0,
+    };
+
+    for (let index = 0; index < 10_000; index += 1) {
+      bufferPendingInput(session, "");
+    }
+    expect(session.pendingInput.length).toBe(0);
+    expect(session.pendingInputBytes).toBe(0);
+
+    for (let index = 0; index < 10_000; index += 1) {
+      bufferPendingInput(session, "x");
+    }
+    expect(session.pendingInput.length).toBeLessThanOrEqual(1024);
+    expect(session.pendingInputBytes).toBeLessThanOrEqual(64 * 1024);
+  });
+
   it("fails the session when the shell stream errors, instead of throwing", async () => {
     const { manager, failures } = await makeManager();
     const session = await manager.createSshSession(host());
@@ -261,8 +285,76 @@ describe("backend ssh session lifecycle", () => {
     // keystrokes the user typed vanished with nothing on screen to say why.
     expect(() => stream.emit("error", new Error("write after end"))).not.toThrow();
     await waitFor(() => failures.length > 0);
-    expect(failures[0]).toContain("write after end");
+    // The reason is fixed text: the raw error can carry a local path, and the
+    // terminal is not the place for one.
+    expect(failures[0]).toContain("connection to the host failed");
+    expect(failures[0]).not.toContain("write after end");
     expect(session.state).toBe("error");
+    // The connection is released: an error is not always followed by a close,
+    // and nothing else would retire the session.
+    expect(client.ended).toBe(true);
+  });
+
+  it("does not resurrect a session whose shell timed out when the shell answers late", async () => {
+    // The shell-open timeout reports the failure and ends the client. A
+    // server that answers the channel open afterwards must not bring the
+    // session back — and the input the user typed in the meantime must not
+    // be run on a shell they were told they do not have.
+    const { manager, failures } = await makeManager({ shellOpenTimeoutMs: 50 });
+    const session = await manager.createSshSession(host());
+
+    const client = ssh2.clients[0];
+    client.emit("ready");
+    await waitFor(() => failures.length > 0);
+    expect(failures[0]).toContain("did not open a shell");
+
+    // The late answer.
+    const { writeSessionInput } = await import("./backend-ssh-session.mjs");
+    writeSessionInput(session, "rm -rf /tmp/important\r");
+    const stream = new FakeStream();
+    client.shellCallback?.(undefined, stream);
+
+    expect(session.state).toBe("error");
+    expect(session.stream).toBeNull();
+    // The typed command never reached a shell.
+    expect(stream.written).toEqual([]);
+  });
+
+  it("does not resurrect a session that was closed before its shell opened", async () => {
+    const { manager } = await makeManager();
+    const session = await manager.createSshSession(host());
+
+    const client = ssh2.clients[0];
+    client.emit("ready");
+    // The connection ends before the shell opens. The session is kept for a
+    // moment so a websocket that attaches late can still read the reason,
+    // but it is over.
+    client.emit("close");
+    await waitFor(() => session.state === "disconnected");
+
+    const stream = new FakeStream();
+    client.shellCallback?.(undefined, stream);
+
+    expect(session.state).not.toBe("connected");
+    expect(session.stream).toBeNull();
+    expect(stream.written).toEqual([]);
+  });
+
+  it("reports a refused shell with fixed text, not the server's wording", async () => {
+    // ssh2's text for a refused channel is written by the server ("Channel
+    // open failure: ..."), and the server does not get to write into the
+    // user's terminal.
+    const { manager, failures } = await makeManager();
+    await manager.createSshSession(host());
+
+    const client = ssh2.clients[0];
+    client.emit("ready");
+    await waitFor(() => client.shellCallback !== undefined);
+    client.shellCallback?.(new Error("Channel open failure: administratively prohibited"));
+
+    await waitFor(() => failures.length > 0);
+    expect(failures[0]).toContain("refused to open a shell");
+    expect(failures[0]).not.toContain("administratively prohibited");
   });
 
   it("fails a session whose shell never opens, instead of waiting for ever", async () => {

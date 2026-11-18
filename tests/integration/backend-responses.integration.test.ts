@@ -465,7 +465,12 @@ describe("#230: the surrounding contract is unchanged", () => {
     // remembered on the session, so a websocket that attaches after the
     // failure is replayed it rather than being told nothing.
     expect(source).toMatch(/session\.failureMessage = getErrorMessage\(error\);/);
-    expect(source).toMatch(/function failSession\(session, error\) \{[\s\S]*?message: session\.failureMessage,/);
+    // The frame itself is built in its own module, so it can be tested
+    // without importing backend.mjs (which binds a port). It carries the
+    // remembered message and the category beside it.
+    const frames = await readFile("apps/desktop/server/backend-session-frames.mjs", "utf8");
+    expect(frames).toContain("message: session.failureMessage,");
+    expect(source).toContain("sessionFailureFrame(session)");
   });
 
   it("still routes the glob endpoint's refusal through an explicit 400", async () => {

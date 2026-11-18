@@ -68,6 +68,7 @@ import {
   writeSessionInput,
 } from "./backend-ssh-session.mjs";
 import { SSH_FAILURE_CODE_VALUES } from "./backend-ssh-failure.mjs";
+import { sessionFailureFrame } from "./backend-session-frames.mjs";
 import { createSftpOperations } from "./backend-sftp-ops.mjs";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const appRoot = normalize(join(__dirname, ".."));
@@ -258,11 +259,7 @@ function failSession(session, error) {
     // (a Node error code, say) is not a category the client understands.
     session.failureCode = SSH_FAILURE_CODE_VALUES.has(error?.code) ? error.code : null;
   }
-  broadcast(session, {
-    type: "error",
-    message: session.failureMessage,
-    ...(session.failureCode ? { code: session.failureCode } : {}),
-  });
+  broadcast(session, sessionFailureFrame(session));
 }
 
 /**
@@ -974,13 +971,7 @@ server.on("upgrade", (request, socket, head) => {
     // A failure that happened before this socket attached was never
     // broadcast to anyone, so it is replayed here.
     if (session.failureMessage) {
-      ws.send(
-        JSON.stringify({
-          type: "error",
-          message: session.failureMessage,
-          ...(session.failureCode ? { code: session.failureCode } : {}),
-        })
-      );
+      ws.send(JSON.stringify(sessionFailureFrame(session)));
     }
 
     if (session.buffer.length || session.droppedBytes) {
