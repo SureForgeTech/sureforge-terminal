@@ -69,6 +69,28 @@ describe("hosts store helpers", () => {
     useGroupSettingsStore.getState().clearGroupSettings("Acme / Production");
   });
 
+  it("finds the group's root when the group is written with spaces around it", () => {
+    // The group is trimmed when the host is saved, so the settings are
+    // looked up with the trimmed name.
+    useGroupSettingsStore.getState().setGroupSettings("Acme / Production", {
+      sftpRoot: "/srv/app",
+    });
+
+    const created = createHostRecord({
+      ...emptyHostFormValues,
+      label: "Grouped host",
+      hostname: "box.internal",
+      username: "ops",
+      group: "  Acme / Production  ",
+      sftpRoot: "",
+    });
+
+    expect(created.group).toBe("Acme / Production");
+    expect(created.sftpRoot).toBe("");
+
+    useGroupSettingsStore.getState().clearGroupSettings("Acme / Production");
+  });
+
   it("keeps the default SFTP root when no group supplies one", () => {
     const created = createHostRecord({
       ...emptyHostFormValues,

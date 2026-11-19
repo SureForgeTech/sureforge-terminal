@@ -108,13 +108,14 @@ describe("the session history and secrets", () => {
   });
 
   it("keeps a secret out of the preview when the output around it is long", () => {
-    // The same boundary, with a credential on a line of its own: the cut
-    // falls between the lines, so the name and the value stay together and
-    // the credential is still masked.
+    // The same boundary, with a credential on a line of its own that the
+    // output around it pushes to the end of the preview: the name and the
+    // value are held together until the value arrives, so the credential is
+    // still masked.
     const filler = "log line\n".repeat(20_000);
     const entry = recordOutputInChunks([
-      `${filler}password=synthetic-value\n`,
-      "tail\n",
+      `${filler}password=`,
+      "synthetic-value\n",
     ]);
 
     expect(entry.outputPreview).not.toContain("synthetic-value");
