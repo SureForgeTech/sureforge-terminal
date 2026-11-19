@@ -59,6 +59,38 @@ function limitCommandHistory(commandHistory: SessionCommandHistoryEntry[]) {
   return commandHistory.slice(0, SESSION_HISTORY_LIMIT);
 }
 
+// The raw output of each history entry, kept in memory only.
+//
+// The redaction has to see a command's output as a WHOLE: the terminal
+// streams it in pieces, and a secret split across two pieces — "password="
+// in one, the value in the next — is only a secret once the pieces are
+// joined. So the raw text is kept here, in memory, and the preview that
+// goes into the store (and into the local storage the store is written to)
+// is always the redacted form of the whole output.
+//
+// The raw text never enters the store state, so it cannot be persisted.
+const rawCommandOutput = new Map<string, string>();
+
+// How much raw output to keep per entry. The preview keeps the last 600
+// characters, so this is generous; it bounds what a long-running command can
+// hold in memory. The tail is kept, because the preview is the tail.
+const RAW_COMMAND_OUTPUT_LIMIT = 64 * 1024;
+
+/**
+ * Forget the raw output of entries the history no longer holds.
+ *
+ * The raw buffer is keyed by history entry, so an entry the history drops
+ * would otherwise leave its output behind for the rest of the session.
+ */
+function forgetDroppedCommandOutput(commandHistory: SessionCommandHistoryEntry[]) {
+  const held = new Set(commandHistory.map((entry) => entry.id));
+  for (const entryId of rawCommandOutput.keys()) {
+    if (!held.has(entryId)) {
+      rawCommandOutput.delete(entryId);
+    }
+  }
+}
+
 function normalizePersistedPane(pane: SessionPane): SessionPane {
   return {
     ...pane,
@@ -621,7 +653,16 @@ export function recordPaneCommandHistory(
   };
 }
 
-export function appendPaneCommandHistoryOutput(
+/**
+ * Set the output preview of a history entry.
+ *
+ * The preview is SET, not appended: the caller hands over the whole output
+ * of the command, because the redaction has to see the whole output before
+ * any of it can be kept. Appending a redacted piece at a time would let a
+ * secret that straddles two pieces through — "password=" in one piece and
+ * the value in the next is not a secret to either piece on its own.
+ */
+export function setPaneCommandHistoryOutput(
   state: SessionWorkspaceState & { commandHistory: SessionCommandHistoryEntry[] },
   entryId: string,
   output: string
@@ -636,9 +677,7 @@ export function appendPaneCommandHistoryOutput(
       return entry;
     }
 
-    const outputPreview = `${entry.outputPreview ? `${entry.outputPreview}\n` : ""}${normalizedOutput}`
-      .slice(-SESSION_HISTORY_OUTPUT_LIMIT)
-      .trim();
+    const outputPreview = normalizedOutput.slice(-SESSION_HISTORY_OUTPUT_LIMIT).trim();
     return {
       ...entry,
       outputPreview,
@@ -779,6 +818,7 @@ export const useSessionsStore = create<SessionsState>()(
         set((state) => consumePaneCommand(state, paneId, commandId)),
       recordPaneCommand: (paneId, command, source = "queued") => {
         const nextState = recordPaneCommandHistory(get(), paneId, command, source);
+        forgetDroppedCommandOutput(nextState.commandHistory);
         set(nextState);
         return nextState.commandHistory[0]?.id;
       },
@@ -788,15 +828,30 @@ export const useSessionsStore = create<SessionsState>()(
         // The command itself is NOT redacted: the history replays it into a
         // session, and a redacted command would run as something else.
         const redact = useAppStore.getState().redactCommandOutput;
-        set((state) =>
-          appendPaneCommandHistoryOutput(
+        set((state) => {
+          // The output arrives in pieces. The pieces are joined first and
+          // redacted as a whole, so a secret that straddles two pieces is
+          // still caught — and the ANSI codes are stripped before the
+          // redaction, so a coloured "password=" is still a "password=".
+          const raw = `${rawCommandOutput.get(entryId) ?? ""}${output}`;
+          const kept =
+            raw.length > RAW_COMMAND_OUTPUT_LIMIT
+              ? raw.slice(-RAW_COMMAND_OUTPUT_LIMIT)
+              : raw;
+          rawCommandOutput.set(entryId, kept);
+
+          const normalized = normalizeCommandHistoryOutput(kept);
+          return setPaneCommandHistoryOutput(
             state,
             entryId,
-            redact ? redactSecrets(output) : output
-          )
-        );
+            redact ? redactSecrets(normalized) : normalized
+          );
+        });
       },
-      clearCommandHistory: () => set(() => ({ commandHistory: [] })),
+      clearCommandHistory: () => {
+        rawCommandOutput.clear();
+        set(() => ({ commandHistory: [] }));
+      },
       queueCommandForHosts: (hosts, command, label) => {
         const paneIds: string[] = [];
 

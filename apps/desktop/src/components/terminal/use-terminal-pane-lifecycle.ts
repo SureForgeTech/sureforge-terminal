@@ -54,6 +54,13 @@ interface TerminalPaneLifecycleOptions {
   hostKeyPolicy: HostRecord["hostKeyPolicy"];
   hostname: HostRecord["hostname"];
   id: HostRecord["id"];
+  /**
+   * The pane's own id.
+   *
+   * A pane is not a host: a host can be open in two panes at once, and the
+   * broadcast works on PANES. The host id is kept for the session itself.
+   */
+  paneId: string;
   initialPaletteRef: MutableRefObject<TerminalAnsiPalette>;
   /** The terminal's font family and size, from the font picker. */
   terminalFontStack: string;
@@ -117,6 +124,7 @@ export function useTerminalPaneLifecycle({
   hostKeyPolicy,
   hostname,
   id,
+  paneId,
   initialPaletteRef,
   terminalFontStack,
   terminalFontSize,
@@ -349,16 +357,20 @@ export function useTerminalPaneLifecycle({
 
     // A pane joins the broadcast by registering a sender for its own input.
     // The sender reads the socket when it is called, so it always sends to the
-    // session the pane has NOW, not the one it had when it registered.
-    const unregisterBroadcastSender = registerBroadcastSender(id, (data) => {
+    // session the pane has NOW, not the one it had when it registered — and
+    // it reports whether it sent, so a pane whose session has dropped is
+    // skipped rather than counted.
+    const unregisterBroadcastSender = registerBroadcastSender(paneId, (data) => {
       const socket = socketRef.current;
-      if (socket?.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: "input", data }));
+      if (socket?.readyState !== WebSocket.OPEN) {
+        return false;
       }
+      socket.send(JSON.stringify({ type: "input", data }));
+      return true;
     });
 
     const { contextMenuHandler, dataDisposable, selectionDisposable } = attachTerminalPaneInputWiring({
-      paneId: id,
+      paneId,
       commandBufferRef,
       connectionStateRef,
       container,
@@ -409,6 +421,7 @@ export function useTerminalPaneLifecycle({
     hostname,
     hostKeyPolicy,
     id,
+    paneId,
     label,
     demoModeEnabled,
     protocol,

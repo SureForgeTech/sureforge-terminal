@@ -118,7 +118,10 @@ export function listTerminalFontOptions(): TerminalFontOption[] {
  * font at all.
  */
 export function resolveTerminalFontStack(name: unknown): string {
-  if (typeof name === "string" && name in fonts) {
+  // An OWN property only: `name in fonts` would also find the inherited
+  // ones, so "constructor" or "__proto__" would resolve to something that is
+  // not a font at all.
+  if (typeof name === "string" && Object.prototype.hasOwnProperty.call(fonts, name)) {
     return fonts[name as TerminalFontName].stack;
   }
   return fonts[DEFAULT_TERMINAL_FONT].stack;

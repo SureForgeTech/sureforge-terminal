@@ -13,16 +13,29 @@
 // This pins the banner contract: the message reaches the screen, it is
 // announced to assistive tech, and the user can dismiss it.
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConnectErrorBanner } from "./ConnectErrorBanner";
 import { useConnectErrorStore } from "../../store/connect-error-store";
 
+/**
+ * Where the router is.
+ *
+ * The action has to take the user to the host that has to change, so the
+ * route it navigates to is part of the contract: a banner that only
+ * cleared itself would pass a test that only checked the banner went away.
+ */
+function CurrentRoute() {
+  const location = useLocation();
+  return <span data-testid="current-route">{`${location.pathname}${location.search}`}</span>;
+}
+
 // The banner's action navigates, so it lives inside the router the app has.
 function renderBanner() {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={["/sessions"]}>
       <ConnectErrorBanner />
+      <CurrentRoute />
     </MemoryRouter>
   );
 }
@@ -114,15 +127,19 @@ describe("ConnectErrorBanner with an action", () => {
     expect(screen.queryByRole("button", { name: "Open host" })).toBeNull();
   });
 
-  it("clears the banner when the action is taken", () => {
+  it("takes the user to the host when the action is taken", () => {
     useConnectErrorStore.getState().setConnectError("The host key could not be approved.", "error", {
       label: "Open host",
       href: "/hosts?edit=host-1",
     });
 
     renderBanner();
+    expect(screen.getByTestId("current-route").textContent).toBe("/sessions");
+
     fireEvent.click(screen.getByRole("button", { name: "Open host" }));
 
+    // The banner goes, and the user lands on the host's editor.
     expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByTestId("current-route").textContent).toBe("/hosts?edit=host-1");
   });
 });

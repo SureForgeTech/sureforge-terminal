@@ -140,6 +140,7 @@ describe("useTerminalPaneLifecycle unmount", () => {
         hostname: host.hostname,
         id: host.id,
         initialPaletteRef: ref({} as never),
+        paneId: "pane-1",
         terminalFontStack: '"SFMono-Regular", "Menlo", "Monaco", monospace',
         terminalFontSize: 13,
         intentionalDisconnectRef: ref(false),
@@ -204,5 +205,90 @@ describe("useTerminalPaneLifecycle unmount", () => {
     // The cleared timer must never fire.
     vi.advanceTimersByTime(5000);
     expect(reconnect).not.toHaveBeenCalled();
+  });
+
+  it("registers the broadcast sender under the pane's id, not the host's", async () => {
+    // A pane is not a host: the broadcast works on PANES, and a host can be
+    // open in two panes at once. Registering under the host's id would mean
+    // the broadcast could never find a recipient.
+    const { useTerminalPaneLifecycle } = await import("./use-terminal-pane-lifecycle");
+    const { hasBroadcastSender } = await import("../../store/broadcast-store");
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const containerRef = createRef<HTMLDivElement>() as MutableRefObject<HTMLDivElement | null>;
+    containerRef.current = container;
+
+    const socketRef = ref<unknown>(null) as MutableRefObject<never>;
+
+    const { unmount } = renderHook(() =>
+      useTerminalPaneLifecycle({
+        activeHistoryEntryIdRef: ref<string | undefined>(undefined),
+        agentForwarding: false as HostRecord["agentForwarding"],
+        appendCommandOutput: vi.fn(),
+        authMethod: host.authMethod,
+        backendSessionIdRef: ref<string | undefined>(undefined),
+        clipboardNoticeRef: ref<(message: string) => void>(() => {}),
+        screenReaderModeRef: ref(true),
+        commandBufferRef: ref(""),
+        contextMenuRequestRef: ref<(position: { x: number; y: number }) => void>(() => {}),
+        connectedOnceRef: ref(false),
+        connectingRef: ref(false),
+        connectionStateRef: ref(pane.connectionState),
+        consumePaneCommand: vi.fn(),
+        containerRef,
+        demoModeEnabled: true,
+        dispatchCommandRef: ref(() => {}),
+        ensureConnectedRef: ref(() => {}),
+        fitAddonRef: ref(null),
+        group: host.group,
+        host,
+        hostKeyPolicy: undefined as unknown as HostRecord["hostKeyPolicy"],
+        hostname: host.hostname,
+        id: host.id,
+        initialPaletteRef: ref({} as never),
+        paneId: pane.id,
+        terminalFontStack: '"SFMono-Regular", "Menlo", "Monaco", monospace',
+        terminalFontSize: 13,
+        intentionalDisconnectRef: ref(false),
+        label: host.label,
+        nativeBridgeEnabled: false,
+        pane,
+        pendingSecretsNoticeShownRef: ref(false),
+        port: host.port,
+        privateKeyPath: host.privateKeyPath,
+        protocol: host.protocol,
+        protocolLabel: "SSH",
+        reconnectAttemptRef: ref(0),
+        reconnectOnRestoreRef: ref(false),
+        reconnectTimeoutRef: ref<number | null>(null),
+        recordPaneCommand: vi.fn(),
+        runtimeStatusRef: ref(null),
+        setPaneBackendSession: vi.fn(),
+        setPaneReconnectOnRestore: vi.fn(),
+        setPaneState: vi.fn(),
+        setPaneTransport: vi.fn(),
+        setRuntimeStatusMessage: vi.fn(),
+        setSearchOpen: vi.fn(),
+        sftpRoot: undefined as unknown as HostRecord["sftpRoot"],
+        socketRef,
+        stableEnvironment: undefined as unknown as HostRecord["environment"],
+        stableTags: host.tags,
+        terminalRef: ref(null),
+        toggleConnectionRef: ref(() => {}),
+        transportRef: ref(pane.transport),
+        unsupportedTransport: false,
+        useMockTransport: true,
+        username: host.username,
+      })
+    );
+
+    expect(hasBroadcastSender(pane.id)).toBe(true);
+    expect(hasBroadcastSender(host.id)).toBe(false);
+
+    unmount();
+
+    // A closed pane leaves the broadcast.
+    expect(hasBroadcastSender(pane.id)).toBe(false);
   });
 });

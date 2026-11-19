@@ -1,16 +1,22 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useSessions } from "../../hooks/useSessions";
 import { describeHostRuntime, formatHostAddress } from "../../lib/utils";
 import { SearchInput } from "../common/SearchInput";
 import { buildHostSearchText } from "../../lib/utils";
 import { useHostsStore } from "../../store/hosts-store";
 import { useCloseGuardStore } from "../../store/close-guard-store";
-import { useBroadcastStore } from "../../store/broadcast-store";
+import {
+  countBroadcastSenders,
+  hasBroadcastSender,
+  subscribeBroadcastSenders,
+  useBroadcastStore,
+} from "../../store/broadcast-store";
 import { useSessionsStore } from "../../store/sessions-store";
 import { hostSupportsPortForwarding, type HostRecord } from "../../types/host";
 import { ErrorBoundary, ScopedErrorFallback } from "../ErrorBoundary";
 import { EmptyState } from "../common/EmptyState";
 import { PortForwardPanel } from "./PortForwardPanel";
+import { selectLiveBroadcastPanes } from "./broadcast-participants";
 import { SplitLayout } from "./SplitLayout";
 import { TerminalPane } from "./TerminalPane";
 import { TabContextMenu, type TabContextMenuPayload } from "./TabContextMenu";
@@ -34,11 +40,40 @@ export function TerminalWorkspace({ launchHost }: TerminalWorkspaceProps) {
   const broadcastEnabled = useBroadcastStore((state) => state.enabled);
   const setBroadcastEnabled = useBroadcastStore((state) => state.setEnabled);
   const setBroadcastPanes = useBroadcastStore((state) => state.setAllPanes);
-  const openPaneIds = useSessionsStore((state) =>
-    Object.values(state.panes)
-      .filter((pane) => pane.transport !== "mock")
-      .map((pane) => pane.id)
+  const broadcastPaneIds = useBroadcastStore((state) => state.paneIds);
+  // The broadcast reaches the PANES that are actually live: a pane whose
+  // session is connected and whose terminal is on screen. A restored tab
+  // that is not open, a pane still waiting for a secret and a mock session
+  // are not taking part, and neither is a pane whose session has dropped.
+  const sessionPanes = useSessionsStore((state) => state.panes);
+  const senderCount = useSyncExternalStore(
+    subscribeBroadcastSenders,
+    countBroadcastSenders
   );
+  const livePaneIds = useMemo(
+    () => {
+      // Without a registered terminal there is nothing that can receive a
+      // broadcast, whatever the sessions say.
+      if (senderCount === 0) {
+        return [];
+      }
+      return selectLiveBroadcastPanes(sessionPanes, hasBroadcastSender);
+    },
+    [sessionPanes, senderCount]
+  );
+  const livePaneKey = livePaneIds.join(",");
+  // The membership follows the live panes: a session that opens joins the
+  // broadcast, and a session that closes leaves it. Without this the banner
+  // would count a session the broadcast does not reach.
+  useEffect(() => {
+    if (!broadcastEnabled) {
+      return;
+    }
+    if (livePaneKey !== broadcastPaneIds.join(",")) {
+      setBroadcastPanes(livePaneIds);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the key is the stable value of the list
+  }, [broadcastEnabled, livePaneKey]);
   const selectTab = useSessionsStore((state) => state.selectTab);
   const splitTab = useSessionsStore((state) => state.splitTab);
   const closePane = useSessionsStore((state) => state.closePane);
@@ -143,8 +178,8 @@ export function TerminalWorkspace({ launchHost }: TerminalWorkspaceProps) {
           role="status"
           className="rounded-[14px] border border-amber-400/50 bg-amber-400/10 px-3 py-2 text-sm text-amber-100"
         >
-          Broadcast is on: what you type goes to every open session ({openPaneIds.length}). Turn it off
-          to type into one session again.
+          Broadcast is on: what you type goes to every open session ({broadcastPaneIds.length}). Turn
+          it off to type into one session again.
         </div>
       ) : null}
 
@@ -166,19 +201,26 @@ export function TerminalWorkspace({ launchHost }: TerminalWorkspaceProps) {
               <button
                 type="button"
                 aria-pressed={broadcastEnabled}
-                disabled={openPaneIds.length < 2}
+                // The two-session rule applies to turning the broadcast ON.
+                // While it is on, the button stays usable: a pane that
+                // closed must not leave the user unable to turn it off.
+                disabled={!broadcastEnabled && livePaneIds.length < 2}
                 onClick={() => {
                   const next = !broadcastEnabled;
-                  // Turning it on sends to every open pane; turning it off
+                  // Turning it on sends to every live pane; turning it off
                   // empties the set, so a later broadcast never reaches a
                   // session the user has closed.
-                  setBroadcastPanes(openPaneIds);
+                  if (next) {
+                    setBroadcastPanes(livePaneIds);
+                  }
                   setBroadcastEnabled(next);
                 }}
                 title={
-                  openPaneIds.length < 2
-                    ? "Open a second session to broadcast input to"
-                    : "Send what you type to every open session"
+                  broadcastEnabled
+                    ? "Turn the broadcast off"
+                    : livePaneIds.length < 2
+                      ? "Open a second session to broadcast input to"
+                      : "Send what you type to every open session"
                 }
                 className={
                   broadcastEnabled

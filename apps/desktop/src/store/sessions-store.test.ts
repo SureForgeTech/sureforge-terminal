@@ -11,7 +11,7 @@ vi.mock("../lib/backend-runtime", async (importOriginal) => ({
 import { closeSession } from "../lib/backend-runtime";
 
 import {
-  appendPaneCommandHistoryOutput,
+  setPaneCommandHistoryOutput,
   closeBackendSessionsForPanes,
   cycleSessionTab,
   closeSessionTab,
@@ -248,7 +248,7 @@ describe("sessions store helpers", () => {
     );
     const entryId = recorded.commandHistory[0]!.id;
 
-    const updated = appendPaneCommandHistoryOutput(
+    const updated = setPaneCommandHistoryOutput(
       recorded,
       entryId,
       "\u001b[32mload average: 1.00\r\nusers: 2\u001b[0m"
@@ -276,7 +276,7 @@ describe("sessions store helpers", () => {
       "queued"
     );
     const entryId = recorded.commandHistory[0]!.id;
-    const updated = appendPaneCommandHistoryOutput(recorded, entryId, "load average: 1.00");
+    const updated = setPaneCommandHistoryOutput(recorded, entryId, "load average: 1.00");
     const optedOut = updatePanePreviewPersistence(updated, paneId, false);
     const persisted = sanitizePersistedCommandHistory(optedOut.commandHistory, optedOut.panes);
 
@@ -308,7 +308,7 @@ describe("sessions store helpers", () => {
       "queued"
     );
     const entryId = recorded.commandHistory[0]!.id;
-    const updated = appendPaneCommandHistoryOutput(recorded, entryId, "load average: 1.00");
+    const updated = setPaneCommandHistoryOutput(recorded, entryId, "load average: 1.00");
     const optedOut = updatePanePreviewPersistence(updated, paneId, false);
     const closed = closeSessionTab(optedOut, tabId);
     const persisted = sanitizePersistedCommandHistory(
@@ -342,7 +342,7 @@ describe("sessions store helpers", () => {
       "queued"
     );
     const entryId = recorded.commandHistory[0]!.id;
-    const updated = appendPaneCommandHistoryOutput(recorded, entryId, "load average: 1.00");
+    const updated = setPaneCommandHistoryOutput(recorded, entryId, "load average: 1.00");
     const closed = closeSessionTab(updated, tabId);
     const persisted = sanitizePersistedCommandHistory(updated.commandHistory, closed.panes);
 

@@ -17,6 +17,10 @@ import { useSessionsStore } from "./sessions-store";
 //
 // The command itself is NOT redacted: the history replays it into a session,
 // and a redacted command would run as something else.
+//
+// The output arrives from the terminal in PIECES, so the redaction has to see
+// the whole output before it keeps any of it: a secret split across two
+// pieces is only a secret once the pieces are joined.
 
 describe("the session history and secrets", () => {
   beforeEach(() => {
@@ -24,7 +28,7 @@ describe("the session history and secrets", () => {
     useSessionsStore.setState({ commandHistory: [] });
   });
 
-  function recordOutput(output: string) {
+  function openPane() {
     const tabId = useSessionsStore.getState().openSession(sampleHosts[0]);
     const state = useSessionsStore.getState();
     const paneId = state.tabs.find((tab) => tab.id === tabId)?.paneIds[0];
@@ -35,7 +39,20 @@ describe("the session history and secrets", () => {
     if (!entryId) {
       throw new Error("no history entry");
     }
+    return entryId;
+  }
+
+  function recordOutput(output: string) {
+    const entryId = openPane();
     useSessionsStore.getState().appendCommandOutput(entryId, output);
+    return useSessionsStore.getState().commandHistory[0];
+  }
+
+  function recordOutputInChunks(chunks: string[]) {
+    const entryId = openPane();
+    for (const chunk of chunks) {
+      useSessionsStore.getState().appendCommandOutput(entryId, chunk);
+    }
     return useSessionsStore.getState().commandHistory[0];
   }
 
@@ -44,6 +61,32 @@ describe("the session history and secrets", () => {
 
     expect(entry.outputPreview).toBeDefined();
     expect(entry.outputPreview).not.toContain("wJalrXUtnFEMIK7MDENGbPxRfiCY");
+    expect(entry.outputPreview).toContain("[redacted]");
+  });
+
+  it("keeps a secret that straddles two pieces out of the preview", () => {
+    // The terminal streams the output in pieces, and a password printed
+    // across a piece boundary is still a password.
+    const entry = recordOutputInChunks(["password=", "synthetic-value"]);
+
+    expect(entry.outputPreview).toBeDefined();
+    expect(entry.outputPreview).not.toContain("synthetic-value");
+    expect(entry.outputPreview).toContain("[redacted]");
+  });
+
+  it("keeps a secret that straddles two pieces and a colour code out of the preview", () => {
+    // The escape codes are stripped before the redaction, so a coloured
+    // name is still a name.
+    const entry = recordOutputInChunks(["[32mpassword[0m=", "synthetic-value"]);
+
+    expect(entry.outputPreview).not.toContain("synthetic-value");
+    expect(entry.outputPreview).toContain("[redacted]");
+  });
+
+  it("keeps a token that straddles two pieces out of the preview", () => {
+    const entry = recordOutputInChunks(["ghp_abcdefghijklmnop", "qrstuvwxyz012345"]);
+
+    expect(entry.outputPreview).not.toContain("ghp_abcdefghijklmnop");
     expect(entry.outputPreview).toContain("[redacted]");
   });
 

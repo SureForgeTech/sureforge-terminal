@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { REDACTION_PLACEHOLDER, containsSecret, redactSecrets } from "./redact-secrets";
+import {
+  REDACTION_PLACEHOLDER,
+  containsSecret,
+  isSecretName,
+  redactSecrets,
+  secretNameWords,
+} from "./redact-secrets";
 
 // The session history keeps a preview of what a command printed, and that
-// preview is persisted across relaunches. A command that prints a secret
+// preview is persisted across restarts. A command that prints a secret
 // leaves it in the history unless it is redacted — these tests pin the
 // redaction that keeps the history without keeping the secret.
 
@@ -19,9 +25,31 @@ describe("redacting secrets", () => {
     expect(redactSecrets("token: s3cr3t")).toBe(`token: ${REDACTION_PLACEHOLDER}`);
   });
 
+  it("masks a credential whose name is camelCase", () => {
+    // The name of a credential is a WORD, not a fixed string: "accessToken"
+    // is a secret and "tokenizer" is not, and the difference is where the
+    // word ends.
+    expect(redactSecrets('{"accessToken":"opaque-value"}')).toBe(
+      `{"accessToken":"${REDACTION_PLACEHOLDER}"}`
+    );
+    expect(redactSecrets("clientSecret=opaque-value")).toBe(
+      `clientSecret=${REDACTION_PLACEHOLDER}`
+    );
+    expect(redactSecrets("apiKey: opaque-value")).toBe(`apiKey: ${REDACTION_PLACEHOLDER}`);
+    expect(redactSecrets("privateKey=opaque-value")).toBe(
+      `privateKey=${REDACTION_PLACEHOLDER}`
+    );
+    expect(redactSecrets('{"refresh_token": "opaque-value"}')).toBe(
+      `{"refresh_token": "${REDACTION_PLACEHOLDER}"}`
+    );
+  });
+
   it("masks the token shapes that are secrets by construction", () => {
     expect(redactSecrets("AKIAIOSFODNN7EXAMPLE")).toBe(REDACTION_PLACEHOLDER);
     expect(redactSecrets("ghp_abcdefghijklmnopqrstuvwxyz012345")).toBe(REDACTION_PLACEHOLDER);
+    expect(redactSecrets("github_pat_11ABCDEFG0abcdefghijklmnopqrstuvwxyz")).toBe(
+      REDACTION_PLACEHOLDER
+    );
     expect(redactSecrets("glpat-abcdefghijklmnopqrst")).toBe(REDACTION_PLACEHOLDER);
     expect(redactSecrets("xoxb-1234567890-abcdefghij")).toBe(REDACTION_PLACEHOLDER);
     expect(
@@ -53,6 +81,9 @@ describe("redacting secrets", () => {
     expect(redactSecrets("authorisation: granted")).toBe("authorisation: granted");
     expect(redactSecrets("tokenizer=fast")).toBe("tokenizer=fast");
     expect(redactSecrets("secretary=alice")).toBe("secretary=alice");
+    // A bare "key" is a lookup far more often than a credential.
+    expect(redactSecrets("key=release")).toBe("key=release");
+    expect(redactSecrets("monkey=banana")).toBe("monkey=banana");
   });
 
   it("leaves an empty or already-redacted value alone", () => {
@@ -66,5 +97,19 @@ describe("redacting secrets", () => {
     expect(containsSecret("password=hunter2")).toBe(true);
     expect(containsSecret("nothing here")).toBe(false);
     expect(containsSecret("")).toBe(false);
+  });
+
+  it("splits a name into the words a credential is named after", () => {
+    expect(secretNameWords("AWS_SECRET_ACCESS_KEY")).toEqual([
+      "aws",
+      "secret",
+      "access",
+      "key",
+    ]);
+    expect(secretNameWords("accessToken")).toEqual(["access", "token"]);
+    expect(secretNameWords("api-key")).toEqual(["api", "key"]);
+    expect(isSecretName("accessToken")).toBe(true);
+    expect(isSecretName("tokenizer")).toBe(false);
+    expect(isSecretName("key")).toBe(false);
   });
 });

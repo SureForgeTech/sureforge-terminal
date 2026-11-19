@@ -44,6 +44,21 @@ describe("terminal fonts", () => {
     }
   });
 
+  it("falls back to the default stack for an inherited property name", () => {
+    // "constructor" and "__proto__" are properties every object has, so a
+    // lookup that does not check for an OWN property would hand the
+    // terminal something that is not a font.
+    expect(resolveTerminalFontStack("constructor")).toBe(
+      resolveTerminalFontStack(DEFAULT_TERMINAL_FONT)
+    );
+    expect(resolveTerminalFontStack("__proto__")).toBe(
+      resolveTerminalFontStack(DEFAULT_TERMINAL_FONT)
+    );
+    expect(resolveTerminalFontStack("toString")).toBe(
+      resolveTerminalFontStack(DEFAULT_TERMINAL_FONT)
+    );
+  });
+
   it("falls back to the default stack for a font it does not know", () => {
     expect(resolveTerminalFontStack("not-a-font")).toBe(
       resolveTerminalFontStack(DEFAULT_TERMINAL_FONT)

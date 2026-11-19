@@ -11,11 +11,20 @@ import { useIdentitiesStore } from "../store/identities-store";
 import { resolveIdentityForHost } from "./host-identity-resolver";
 import type { KnownHostRecord } from "../types/known-host";
 
+/**
+ * The host fields a connection is built from.
+ *
+ * The group is part of it: a group's settings are defaults for the hosts in
+ * it, so a caller that builds a connection from a subset of a host's fields
+ * has to say which group the host is in, or the group's settings are
+ * silently ignored.
+ */
 type BackendConnectionHost = Pick<
   HostRecord,
   | "agentForwarding"
   | "authMethod"
   | "environment"
+  | "group"
   | "hostKeyPolicy"
   | "id"
   | "hostname"
@@ -53,7 +62,7 @@ function buildBackendConnectionRecursive(
   // that needs its own bastion still has one.
   const groupSettings = groupSettingsFor(
     useGroupSettingsStore.getState().groupSettings,
-    (host as { group?: string }).group
+    host.group
   );
   const effectiveHost = applyGroupSettings(host, groupSettings);
 

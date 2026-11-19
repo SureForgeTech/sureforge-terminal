@@ -329,6 +329,11 @@ export function createTerminalPaneNativeSessionController(options: TerminalPaneN
                 agentForwarding,
                 authMethod,
                 environment: stableEnvironment,
+                // The group is what a group's settings hang off, so a fresh
+                // connection has to carry it: without it the group's user
+                // name, bastion, environment and SFTP root were ignored on
+                // every new session.
+                group: readLatestHost().group,
                 hostKeyPolicy,
                 hostname,
                 id,

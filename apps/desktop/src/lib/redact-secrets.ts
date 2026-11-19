@@ -19,14 +19,43 @@
 /** What a redacted value is replaced with. */
 export const REDACTION_PLACEHOLDER = "[redacted]";
 
-// KEY=value, "key": "value", key: value — with a quoted or bare value.
+// The words a secret is usually stored under.
 //
-// The name has to be a sequence of components, one of which is a secret word.
-// That is what keeps "authorisation" (which contains "auth") and "tokenizer"
-// (which starts with "token") out: the secret word has to be a whole
-// component, and the name has to end at a word boundary.
-const SECRET_ASSIGNMENT_PATTERN =
-  /(["']?\b(?:[A-Za-z0-9]+[-_])*(?:pass(?:word|phrase)?|secret|token|api[-_]?key|access[-_]?key|credential|private[-_]?key)(?:[-_][A-Za-z0-9]+)*\b["']?\s*[:=]\s*)("[^"\n]*"|'[^'\n]*'|[^\s,;]+)/gi;
+// The comparison is against the WORDS of a name, not against the name as a
+// whole: "accessToken" is a secret and "tokenizer" is not, and the only
+// difference is the word boundary. A plural counts ("secrets", "tokens",
+// "passwords"), and the match is case-insensitive.
+const SECRET_WORDS = new Set([
+  "password",
+  "passwd",
+  "passphrase",
+  "secret",
+  "token",
+  "credential",
+  "auth",
+  "apikey",
+  "accesskey",
+  "privatekey",
+]);
+
+// A name that pairs a qualifier with "key" is a secret: "apiKey",
+// "accessKey", "privateKey". A bare "key" is NOT — "key=value" is far more
+// often a lookup than a credential.
+const SECRET_KEY_QUALIFIERS = new Set([
+  "api",
+  "access",
+  "private",
+  "client",
+  "signing",
+  "encryption",
+  "ssh",
+]);
+
+// KEY=value, "key": "value", key: value — the name is captured on its own so
+// it can be checked word by word, and the separator is captured so the
+// replacement keeps the shape of the text.
+const ASSIGNMENT_PATTERN =
+  /(["']?)([A-Za-z0-9_][A-Za-z0-9_.-]*)\1(\s*[:=]\s*)("[^"\n]*"|'[^'\n]*'|[^\s,;}]+)/g;
 
 // Well-known token shapes. Each is long enough and specific enough that a
 // false positive is very unlikely.
@@ -35,6 +64,8 @@ const TOKEN_PATTERNS: RegExp[] = [
   /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
   // GitHub tokens.
   /\bgh[pousr]_[A-Za-z0-9]{16,}\b/g,
+  // GitHub fine-grained personal access tokens.
+  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
   // GitLab tokens.
   /\bglpat-[A-Za-z0-9_-]{20,}\b/g,
   // Slack tokens.
@@ -44,6 +75,64 @@ const TOKEN_PATTERNS: RegExp[] = [
   // A private key block.
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
 ];
+
+/**
+ * The words of a name.
+ *
+ * "AWS_SECRET_ACCESS_KEY" becomes [aws, secret, access, key], "accessToken"
+ * becomes [access, token], and "api-key" becomes [api, key]. The separators
+ * are `-`, `_`, `.` and the case change in a camelCase name.
+ */
+export function secretNameWords(name: string): string[] {
+  return name
+    .replace(/^["']|["']$/g, "")
+    .split(/[^A-Za-z0-9]+/)
+    .flatMap((chunk) => chunk.replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(" "))
+    .filter((word) => word.length > 0)
+    .map((word) => word.toLowerCase());
+}
+
+function isSecretWord(word: string): boolean {
+  if (SECRET_WORDS.has(word)) {
+    return true;
+  }
+  // A plural is the same word.
+  if (word.length > 3 && word.endsWith("s")) {
+    return SECRET_WORDS.has(word.slice(0, -1));
+  }
+  return false;
+}
+
+function singular(word: string): string {
+  return word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word;
+}
+
+/**
+ * Whether a name is one a secret is stored under.
+ *
+ * The name is split into words and checked: a secret word anywhere in it
+ * makes it a secret name, and so does a qualified "key" ("apiKey").
+ */
+export function isSecretName(name: string): boolean {
+  const words = secretNameWords(name);
+
+  for (const word of words) {
+    if (isSecretWord(word)) {
+      return true;
+    }
+  }
+
+  for (let index = 0; index + 1 < words.length; index += 1) {
+    if (words[index + 1] !== "key" && words[index + 1] !== "keys") {
+      continue;
+    }
+    if (SECRET_KEY_QUALIFIERS.has(singular(words[index]))) {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 /**
  * Mask the secrets in a piece of text.
@@ -58,8 +147,18 @@ export function redactSecrets(text: string): string {
   }
 
   let redacted = text.replace(
-    SECRET_ASSIGNMENT_PATTERN,
-    (match: string, prefix: string, value: string) => {
+    ASSIGNMENT_PATTERN,
+    (
+      match: string,
+      quote: string,
+      name: string,
+      separator: string,
+      value: string
+    ) => {
+      if (!isSecretName(name)) {
+        return match;
+      }
+
       const inner = value.startsWith('"')
         ? value.slice(1, -1)
         : value.startsWith("'")
@@ -70,8 +169,9 @@ export function redactSecrets(text: string): string {
       if (!inner || inner === REDACTION_PLACEHOLDER) {
         return match;
       }
-      const quote = value.startsWith('"') ? '"' : value.startsWith("'") ? "'" : "";
-      return `${prefix}${quote}${REDACTION_PLACEHOLDER}${quote}`;
+
+      const valueQuote = value.startsWith('"') ? '"' : value.startsWith("'") ? "'" : "";
+      return `${quote}${name}${quote}${separator}${valueQuote}${REDACTION_PLACEHOLDER}${valueQuote}`;
     }
   );
 

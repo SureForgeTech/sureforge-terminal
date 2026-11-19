@@ -218,6 +218,9 @@ export function useTerminalPaneSession({
     nativeBridgeEnabled,
     pane,
     pendingSecretsNoticeShownRef,
+    // The broadcast works on panes, not on hosts: a host can be open in two
+    // panes at once, and each pane takes part in its own right.
+    paneId: pane.id,
     port,
     privateKeyPath,
     protocol,

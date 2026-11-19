@@ -14,8 +14,14 @@
 
 import { create } from "zustand";
 
-/** Sends input to one pane. */
-export type PaneInputSender = (data: string) => void;
+/**
+ * Sends input to one pane.
+ *
+ * It reports whether the input was actually delivered: a pane whose session
+ * has dropped is skipped rather than counted, so a broadcast never queues
+ * input for a session that is not there.
+ */
+export type PaneInputSender = (data: string) => boolean;
 
 interface BroadcastState {
   /** Whether input is broadcast at all. */
@@ -50,7 +56,42 @@ export const useBroadcastStore = create<BroadcastState>()((set) => ({
 
 // The senders, beside the store rather than in it: they are functions, and
 // the persisted half of the state must stay serialisable.
+//
+// A pane registers when its terminal exists and unregisters when it goes, so
+// a closed pane never receives a broadcast. The registry is also what says
+// which panes are LIVE: a pane with no terminal cannot take part, whatever
+// the store's pane list says.
 const senders = new Map<string, PaneInputSender>();
+const senderListeners = new Set<() => void>();
+
+function notifySendersChanged() {
+  for (const listener of senderListeners) {
+    listener();
+  }
+}
+
+/**
+ * Subscribe to the registry changing.
+ *
+ * A pane joins and leaves the broadcast as its terminal is created and
+ * destroyed, and the surfaces that show the participants have to follow.
+ */
+export function subscribeBroadcastSenders(listener: () => void): () => void {
+  senderListeners.add(listener);
+  return () => {
+    senderListeners.delete(listener);
+  };
+}
+
+/** How many panes have a terminal that can receive a broadcast. */
+export function countBroadcastSenders(): number {
+  return senders.size;
+}
+
+/** Whether a pane has a terminal that can receive a broadcast. */
+export function hasBroadcastSender(paneId: string): boolean {
+  return senders.has(paneId);
+}
 
 /**
  * Register a pane's input sender, and get a function that removes it.
@@ -60,15 +101,18 @@ const senders = new Map<string, PaneInputSender>();
  */
 export function registerBroadcastSender(paneId: string, send: PaneInputSender): () => void {
   senders.set(paneId, send);
+  notifySendersChanged();
   return () => {
-    senders.delete(paneId);
+    if (senders.delete(paneId)) {
+      notifySendersChanged();
+    }
   };
 }
 
 /**
  * Send input to the given panes.
  *
- * A pane whose session is not open is skipped: the sender checks, so a
+ * A pane whose session is not open is skipped: the sender says so, so a
  * broadcast never queues input for a session that is not there.
  */
 export function broadcastInput(paneIds: string[], data: string): number {
@@ -78,8 +122,9 @@ export function broadcastInput(paneIds: string[], data: string): number {
     if (!send) {
       continue;
     }
-    send(data);
-    delivered += 1;
+    if (send(data)) {
+      delivered += 1;
+    }
   }
   return delivered;
 }
