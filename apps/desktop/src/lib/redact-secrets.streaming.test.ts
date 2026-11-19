@@ -271,6 +271,39 @@ describe("redacting a stream of output", () => {
     expect(redactor.append("")).not.toContain("secret words");
   });
 
+  it("masks a second credential that is waiting when the output is finished", () => {
+    // The text after the open value is ordinary text, but it is masked the
+    // same way, so a second credential in it is masked as well.
+    const redactor = new OutputRedactor();
+    redactor.append('password="secret token=second-secret');
+
+    const flushed = redactor.flush();
+    expect(flushed).not.toContain("second-secret");
+    expect(flushed).toBe(wholeTextPreview('password="secret token=second-secret'));
+  });
+
+  it("never shows a Slack token that is split across many pieces", () => {
+    const redactor = new OutputRedactor();
+    const text = `xoxb-${"A".repeat(1_000)}`;
+    for (let index = 0; index < text.length; index += 10) {
+      redactor.append(text.slice(index, index + 10));
+    }
+
+    const preview = redactor.append("");
+    expect(preview).not.toMatch(/A{100}/);
+    expect(preview).toContain("[redacted]");
+  });
+
+  it("keeps the ordinary text after a line that ends a dropped value", () => {
+    const redactor = new OutputRedactor();
+    const text = `password="${"A".repeat(70_000)}\nordinary-after-key`;
+    for (let index = 0; index < text.length; index += 1_000) {
+      redactor.append(text.slice(index, index + 1_000));
+    }
+
+    expect(redactor.append("")).toContain("ordinary-after-key");
+  });
+
   it("keeps masking a value after the output was finished", () => {
     // The output of a command can go quiet and then carry on. Finishing it
     // must not let the words of the secret out.

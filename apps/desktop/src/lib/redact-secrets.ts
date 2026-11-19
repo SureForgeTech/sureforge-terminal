@@ -275,10 +275,10 @@ const TOKEN_PREFIXES: string[] = [
   "github_pat_",
   "glpat-",
   "xoxa-",
-  "xoxb_",
-  "xoxp_",
-  "xoxr_",
-  "xoxs_",
+  "xoxb-",
+  "xoxp-",
+  "xoxr-",
+  "xoxs-",
   "eyJ",
 ];
 
@@ -562,8 +562,10 @@ export class OutputRedactor {
         this.releaseTokens(value);
       }
       // The text after the value is ordinary text, the way the whole-text
-      // redaction reads it.
-      this.releaseTokens(bare ? this.pending.slice(bare.index) : "");
+      // redaction reads it — but it is masked the same way, so that a second
+      // credential in it is masked as well.
+      const rest = bare ? this.pending.slice(bare.index) : "";
+      this.release(this.redactEnabled ? redactSecrets(rest) : rest);
       this.pending = "";
       // The value stays OPEN: output that arrives after this is still part
       // of it, and it is still masked.
@@ -956,6 +958,13 @@ export class OutputRedactor {
     if (end < 0) {
       if (this.pending.length === 0) {
         return false;
+      }
+      if (this.pending.includes("\n")) {
+        // The quote is never closed before the line ends, so the value falls
+        // back to the bare one — and the text after the line is ordinary
+        // text again.
+        this.mode = "drop-value";
+        return true;
       }
       this.pending = "";
       return true;
