@@ -19,12 +19,14 @@
 /** What a redacted value is replaced with. */
 export const REDACTION_PLACEHOLDER = "[redacted]";
 
-// The words a secret is usually stored under.
-//
-// The comparison is against the WORDS of a name, not against the name as a
-// whole: "accessToken" is a secret and "tokenizer" is not, and the only
-// difference is the word boundary. A plural counts ("secrets", "tokens",
-// "passwords"), and the match is case-insensitive.
+/**
+ * The words a secret is usually stored under.
+ *
+ * The comparison is against the WORDS of a name, not against the name as a
+ * whole: "accessToken" is a secret and "tokenizer" is not, and the only
+ * difference is the word boundary. A plural counts ("secrets", "tokens",
+ * "passwords"), and the match is case-insensitive.
+ */
 const SECRET_WORDS = new Set([
   "password",
   "passwd",
@@ -55,6 +57,7 @@ const SECRET_KEY_QUALIFIERS = new Set([
 // KEY=value, "key": "value", key: value — the name is captured on its own so
 // it can be checked word by word, and the separator is captured so the
 // replacement keeps the shape of the text.
+//
 // The name is bounded: an unbounded one is QUADRATIC on a long line of
 // output (the engine tries every name length at every position), and a
 // 70 kB base64 blob would take seconds to redact.
@@ -204,6 +207,21 @@ export function containsSecret(text: string): boolean {
   return redactSecrets(text) !== text;
 }
 
+/**
+ * Mask only the tokens in a piece of text.
+ *
+ * The whole-text redaction masks the assignments first and the tokens
+ * after, so a piece of text that is not part of an assignment is masked
+ * with the token shapes alone.
+ */
+function maskTokens(text: string): string {
+  let masked = text;
+  for (const pattern of TOKEN_PATTERNS) {
+    masked = masked.replace(pattern, REDACTION_PLACEHOLDER);
+  }
+  return masked;
+}
+
 // The escape codes a terminal writes around its output, and the bell.
 const ANSI_ESCAPE_CHARACTER = String.fromCharCode(27);
 const TERMINAL_BELL_CHARACTER = String.fromCharCode(7);
@@ -226,17 +244,35 @@ const INCOMPLETE_ESCAPE_TAIL_REGEX = new RegExp(
 /** How much of the redacted output the preview keeps. */
 export const REDACTED_PREVIEW_LIMIT = 600;
 
-// A private key block, open or closed.
-const PRIVATE_KEY_BEGIN = "-----BEGIN";
-const PRIVATE_KEY_END = "-----END";
-
-// How much of a key block's body is kept while the block is open: enough to
-// recognise an END marker that arrives in two pieces.
-const PRIVATE_KEY_MARKER_KEEP = 64;
+// A private key block, open or closed. The whole markers are used, so that a
+// "-----BEGIN" that is not a key block is not treated as one.
+const PRIVATE_KEY_END = "-----END [A-Z ]*PRIVATE KEY-----";
 
 // The longest a credential name can be. A name longer than this is not a
 // credential name, so it is never held back waiting for one.
 const MAX_CREDENTIAL_NAME_LENGTH = 64;
+
+// The characters a name, a token or a key marker is made of.
+const NAME_CHARACTER = /[A-Za-z0-9_.-]/;
+
+// The prefixes a run can start with and still be a token.
+const TOKEN_PREFIXES = [
+  "AKIA",
+  "ASIA",
+  "ghp_",
+  "gho_",
+  "ghu_",
+  "ghs_",
+  "ghr_",
+  "github_pat_",
+  "glpat-",
+  "xoxa-",
+  "xoxb-",
+  "xoxp-",
+  "xoxr-",
+  "xoxs-",
+  "eyJ",
+];
 
 /**
  * The tail of the text that is an escape sequence that has not finished.
@@ -261,70 +297,98 @@ export function stripTerminalCodes(text: string): string {
 }
 
 /**
- * The assignment at the tail of the text, if there is one.
+ * The name in front of a separator, and where it starts.
  *
- * An assignment is the name, the separator and the value. It is at the tail
- * when nothing but whitespace and the value follow the separator — the value
- * ends at the first whitespace or delimiter, so an assignment whose value
- * has arrived is finished and an assignment whose value has not is still
- * open.
- *
- * The name is what tells the redaction that the value is a secret, so an
- * open assignment is held whole until its value arrives.
+ * A name is a run of name characters that starts with a letter, a digit or
+ * an underscore, and it is at most 64 characters long — a longer run is not
+ * a credential name.
  */
-function openAssignment(text: string): { index: number; value: string } | undefined {
-  // The last separator, walking back over the characters a name or a value
-  // is made of.
-  let separator = -1;
-  for (let index = text.length - 1; index >= 0; index -= 1) {
-    const character = text[index];
-    if (character === "=" || character === ":") {
-      separator = index;
-      break;
-    }
-    if (!/[\sA-Za-z0-9_.-]/.test(character)) {
-      // A delimiter ends the search: the assignment ended earlier.
-      return undefined;
-    }
-  }
-  if (separator < 0) {
-    return undefined;
+function nameBefore(text: string, separator: number): number {
+  // A quoted name: the quote closes it, so the name is the run before it.
+  let end = separator;
+  const closing = text[end - 1];
+  if (closing === '"' || closing === "'") {
+    end -= 1;
   }
 
-  // The name, before the separator.
-  let nameStart = separator;
-  while (nameStart > 0 && /[A-Za-z0-9_.-]/.test(text[nameStart - 1])) {
-    nameStart -= 1;
+  let start = end;
+  while (start > 0 && NAME_CHARACTER.test(text[start - 1])) {
+    start -= 1;
   }
-  if (nameStart === separator || separator - nameStart > MAX_CREDENTIAL_NAME_LENGTH) {
-    return undefined;
+  if (start === end || end - start > MAX_CREDENTIAL_NAME_LENGTH) {
+    return -1;
   }
-
-  // What follows the separator must be the value and nothing else.
-  const after = text.slice(separator + 1);
-  if (!/^\s*[^\s,;}]*$/.test(after)) {
-    return undefined;
+  if (!/[A-Za-z0-9_]/.test(text[start])) {
+    return -1;
   }
-
-  const value = after.trimStart();
-  return { index: nameStart, value };
+  return start;
 }
 
 /**
- * The start of the run of name characters at the tail of the text.
+ * The next assignment in the text.
  *
- * A run like "pass" can still become the name of a credential, and a token
- * like "ghp_abc" can still grow, so the run is held until more text says
- * what it is. A run longer than a credential name cannot be one, so it is
- * released.
+ * An assignment is a name, a separator and a value, and it is found the
+ * same way the whole-text redaction finds it: the first separator that has a
+ * name in front of it.
  */
-function trailingNameRunStart(text: string): number {
-  let index = text.length;
-  while (index > 0 && /[A-Za-z0-9_.-]/.test(text[index - 1])) {
-    index -= 1;
+function findAssignment(text: string): { nameStart: number; separator: number } | undefined {
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (character !== "=" && character !== ":") {
+      continue;
+    }
+    const nameStart = nameBefore(text, index);
+    if (nameStart >= 0) {
+      return { nameStart, separator: index };
+    }
   }
-  const run = text.length - index;
-  return run > 0 && run <= MAX_CREDENTIAL_NAME_LENGTH ? index : -1;
+  return undefined;
+}
+
+/**
+ * Whether the text is a private key header, and whether it could still
+ * become one.
+ *
+ * The whole-text redaction only treats "-----BEGIN [A-Z ]*PRIVATE KEY-----"
+ * as a key block, so a "-----BEGIN" that is not one is ordinary text. A
+ * header that is not complete yet may still become one, and is held until
+ * it does.
+ */
+function privateKeyHeaderState(text: string): "complete" | "partial" | "none" {
+  const literal = "PRIVATE KEY-----";
+  const rest = text.slice("-----BEGIN ".length);
+
+  // The "[A-Z ]*" part may take any number of characters, so the header
+  // can be split in more than one way. The loop is bounded: a header whose
+  // first part is longer than this is not a header.
+  for (let consumed = 0; consumed <= rest.length && consumed <= 128; consumed += 1) {
+    const head = rest.slice(0, consumed);
+    if (!/^[A-Z ]*$/.test(head)) {
+      break;
+    }
+    // The header is complete when the literal follows the "[A-Z ]*" part.
+    if (rest.startsWith(literal, consumed)) {
+      return "complete";
+    }
+    // It may still become one when what follows is the start of the
+    // literal and the text ends there.
+    const tail = rest.slice(consumed);
+    if (tail.length < literal.length && literal.startsWith(tail)) {
+      return "partial";
+    }
+  }
+  return "none";
+}
+
+/**
+ * Whether a run of name characters could be a token.
+ *
+ * A token is a run that starts with a recognisable prefix. It is not held
+ * to the length of a credential name: a token is longer than a name, and a
+ * token that is released too early leaves its tail in the preview.
+ */
+function isTokenRun(run: string): boolean {
+  return TOKEN_PREFIXES.some((prefix) => run.startsWith(prefix));
 }
 
 /**
@@ -334,15 +398,23 @@ function trailingNameRunStart(text: string): number {
  * two pieces — so the redaction has to see enough context to recognise it,
  * and it must not have to look at the whole output again for every piece.
  *
- * The redactor is therefore a small state machine:
+ * The redactor is therefore a small lexer over the pieces:
  *
- * - NORMAL: text is released as soon as nothing can still change it. What
- *   can still change is an assignment whose value has not arrived, and a
- *   run of name characters that could still become a credential name.
- * - IN-VALUE: the rest of an assignment's value. It is one secret and it
- *   ends at the first whitespace or delimiter, so it is masked and dropped
- *   as it arrives.
- * - IN-KEY: the body of a private key block. It is masked and dropped as it
+ * - NORMAL: the text is released as soon as nothing in it can still change.
+ *   What can still change is an assignment whose value has not arrived, a
+ *   run of name characters that could still become a credential name, and a
+ *   token that could still grow.
+ * - AWAITING-VALUE: a secret assignment's separator was seen. Its value may
+ *   be on the next line, so the whitespace is released as it arrives and the
+ *   value is masked when it comes.
+ * - SECRET-VALUE / SECRET-QUOTED-VALUE: the value of a secret assignment.
+ *   It is one secret, so it is masked and dropped as it arrives.
+ * - PLAIN-VALUE / PLAIN-QUOTED-VALUE: the value of an assignment that is
+ *   not a secret. It is released as it arrives, but it is still consumed as
+ *   one thing, so a construct inside it is not picked up a second time.
+ * - TOKEN: a token that may still grow. It is held until it ends, and then
+ *   masked as a whole.
+ * - KEY: the body of a private key block. It is masked and dropped as it
  *   arrives, so a key block of any length costs nothing.
  *
  * What is released is masked once, and what is held is small, so the cost
@@ -355,7 +427,19 @@ export class OutputRedactor {
   private pending = "";
   /** An escape sequence that has not finished arriving. */
   private escapeCarry = "";
-  private mode: "normal" | "in-value" | "in-key" = "normal";
+  private mode:
+    | "normal"
+    | "awaiting-value"
+    | "secret-value"
+    | "secret-quoted-value"
+    | "plain-value"
+    | "plain-quoted-value"
+    | "token"
+    | "key" = "normal";
+  /** The quote that opened the value, when the value is quoted. */
+  private valueQuote = "";
+  /** Whether the value's content has already been masked and dropped. */
+  private valueMasked = false;
   private redactEnabled: boolean;
 
   constructor(redact: boolean = true) {
@@ -366,10 +450,18 @@ export class OutputRedactor {
    * Turn the redaction on or off.
    *
    * The setting is a preference the user can change while a command runs,
-   * so the next piece of output follows the new setting.
+   * so the next piece of output follows the new setting — and the lexer
+   * starts again, so that a construct that was half-read under the old
+   * setting cannot swallow the output under the new one.
    */
   setRedactionEnabled(redact: boolean) {
+    if (redact === this.redactEnabled) {
+      return;
+    }
     this.redactEnabled = redact;
+    this.mode = "normal";
+    this.valueQuote = "";
+    this.valueMasked = false;
   }
 
   /**
@@ -396,31 +488,6 @@ export class OutputRedactor {
     this.escapeCarry = carry;
     const text = stripTerminalCodes(combined.slice(0, combined.length - carry.length));
 
-    if (this.redactEnabled && this.mode === "in-key") {
-      // The body of a key block: masked and dropped, with just enough kept
-      // to recognise an END marker that arrives in two pieces.
-      const together = this.pending + text;
-      const end = together.indexOf(PRIVATE_KEY_END);
-      if (end < 0) {
-        this.pending = together.slice(-PRIVATE_KEY_MARKER_KEEP);
-        return this.preview();
-      }
-      this.mode = "normal";
-      this.pending = "";
-      return this.appendText(together.slice(end + PRIVATE_KEY_END.length));
-    }
-
-    if (this.redactEnabled) {
-      const begin = text.indexOf(PRIVATE_KEY_BEGIN);
-      if (begin >= 0) {
-        this.release(this.pending + text.slice(0, begin));
-        this.release(REDACTION_PLACEHOLDER);
-        this.mode = "in-key";
-        this.pending = text.slice(begin).slice(-PRIVATE_KEY_MARKER_KEEP);
-        return this.preview();
-      }
-    }
-
     if (this.escapeCarry) {
       // The text in front of an unfinished escape sequence may be part of a
       // name, so nothing is released until the sequence completes.
@@ -428,88 +495,304 @@ export class OutputRedactor {
       return this.preview();
     }
 
-    return this.appendText(text);
-  }
-
-  private appendText(text: string): string {
-    if (!this.redactEnabled) {
-      this.pending += text;
-      this.release(this.pending);
-      this.pending = "";
-      return this.preview();
-    }
-
-    if (this.mode === "in-value") {
-      // The rest of an assignment's value: it is one secret, and it ends at
-      // the first whitespace or delimiter.
-      const end = /[\s,;}]/.exec(text);
-      if (!end) {
-        return this.preview();
-      }
-      this.mode = "normal";
-      this.pending = "";
-      this.release(text[end.index]);
-      return this.appendText(text.slice(end.index + 1));
-    }
-
     this.pending += text;
-
-    // An assignment at the tail: its name, its separator and its value are
-    // masked as one thing, so the whole of it is held until the value has
-    // arrived.
-    const assignment = openAssignment(this.pending);
-    if (assignment) {
-      this.release(this.pending.slice(0, assignment.index));
-      if (assignment.value.length === 0) {
-        // The value has not arrived: the assignment is held whole.
-        this.pending = this.pending.slice(assignment.index);
-        return this.preview();
-      }
-      // The value has arrived: it is masked now, and the rest of it is
-      // masked as it arrives.
-      this.release(this.pending.slice(assignment.index));
-      this.mode = "in-value";
-      this.pending = "";
-      return this.preview();
-    }
-
-    // A run of name characters at the tail could still be the name of a
-    // credential, or the start of a token.
-    const run = trailingNameRunStart(this.pending);
-    if (run >= 0) {
-      this.release(this.pending.slice(0, run));
-      this.pending = this.pending.slice(run);
-      return this.preview();
-    }
-
-    this.release(this.pending);
-    this.pending = "";
+    this.lex();
     return this.preview();
   }
 
+  /** Read as much of the held text as can be read. */
+  private lex(): void {
+    let progressed = true;
+    while (progressed) {
+      progressed = false;
+
+      switch (this.mode) {
+        case "normal":
+          progressed = this.lexNormal();
+          break;
+        case "awaiting-value":
+          progressed = this.lexAwaitingValue();
+          break;
+        case "secret-value":
+        case "secret-quoted-value":
+        case "plain-value":
+        case "plain-quoted-value":
+          progressed = this.lexValue();
+          break;
+        case "token":
+          progressed = this.lexToken();
+          break;
+        case "key":
+          progressed = this.lexKey();
+          break;
+      }
+    }
+  }
+
+  /** The text between the constructs: it is released, masked as tokens. */
+  private lexNormal(): boolean {
+    const assignment = findAssignment(this.pending);
+
+    // A private key block comes first: its marker is not a name, and its
+    // body is dropped as it arrives. With the redaction off it is ordinary
+    // text.
+    const keyStart = this.redactEnabled ? this.pending.indexOf("-----BEGIN") : -1;
+    if (keyStart >= 0 && (!assignment || keyStart < assignment.nameStart)) {
+      const header = privateKeyHeaderState(this.pending.slice(keyStart));
+      if (header === "partial") {
+        // The header is not complete yet: it may still be one.
+        return false;
+      }
+      if (header === "complete") {
+        this.releaseTokens(this.pending.slice(0, keyStart));
+        this.release(REDACTION_PLACEHOLDER);
+        this.pending = this.pending.slice(keyStart);
+        this.mode = "key";
+        return true;
+      }
+      // It is not a key block at all: it is ordinary text, and the text
+      // after it is scanned as usual.
+      this.releaseTokens(this.pending.slice(0, keyStart + "-----BEGIN".length));
+      this.pending = this.pending.slice(keyStart + "-----BEGIN".length);
+      return true;
+    }
+
+    if (assignment) {
+      const quoted =
+        this.pending[assignment.nameStart - 1] === '"' ||
+        this.pending[assignment.nameStart - 1] === "'";
+      const name = this.pending.slice(assignment.nameStart, assignment.separator);
+      // With the redaction off, nothing is masked and nothing is dropped.
+      const secret = this.redactEnabled && isSecretName(name);
+      const start = assignment.nameStart - (quoted ? 1 : 0);
+
+      // The text before the assignment, then the name and the separator.
+      this.releaseTokens(this.pending.slice(0, start));
+      this.releaseTokens(this.pending.slice(start, assignment.separator + 1));
+      this.pending = this.pending.slice(assignment.separator + 1);
+      // A secret assignment's value is masked; an ordinary one is released
+      // as it arrives, but it is consumed as one thing so that a construct
+      // inside it is not picked up a second time.
+      this.mode = secret ? "awaiting-value" : "plain-value";
+      return true;
+    }
+
+    // No assignment: the text is a token, or it is ordinary text.
+    const runStart = this.runStart();
+    if (runStart >= 0) {
+      const run = this.pending.slice(runStart);
+      if (isTokenRun(run)) {
+        // The token may still grow: it is held until it ends.
+        this.releaseTokens(this.pending.slice(0, runStart));
+        this.pending = this.pending.slice(runStart);
+        this.mode = "token";
+        return true;
+      }
+      if (run.length <= MAX_CREDENTIAL_NAME_LENGTH) {
+        // The run may still become the name of a credential.
+        this.releaseTokens(this.pending.slice(0, runStart));
+        this.pending = this.pending.slice(runStart);
+        return false;
+      }
+    }
+
+    // Nothing can change any more: the text is released.
+    this.releaseTokens(this.pending);
+    this.pending = "";
+    return false;
+  }
+
+  /** A secret assignment's separator was seen: the value may still come. */
+  private lexAwaitingValue(): boolean {
+    const text = this.pending;
+    if (text.length === 0) {
+      return false;
+    }
+
+    const character = text[0];
+    if (/\s/.test(character)) {
+      // The whitespace belongs to the separator: it is released as it
+      // arrives, and the value may still come after it.
+      this.releaseTokens(character);
+      this.pending = text.slice(1);
+      return true;
+    }
+
+    if (character === "," || character === ";" || character === "}") {
+      // The value is empty, so there is no secret to mask.
+      this.releaseTokens(character);
+      this.pending = text.slice(1);
+      this.mode = "normal";
+      return true;
+    }
+
+    if (character === '"' || character === "'") {
+      this.releaseTokens(character);
+      this.pending = text.slice(1);
+      this.valueQuote = character;
+      this.mode = "secret-quoted-value";
+      return true;
+    }
+
+    this.mode = "secret-value";
+    return true;
+  }
+
+  /** The value of an assignment is arriving. */
+  private lexValue(): boolean {
+    const text = this.pending;
+    if (text.length === 0) {
+      return false;
+    }
+
+    const quoted =
+      this.mode === "secret-quoted-value" || this.mode === "plain-quoted-value";
+    const secret =
+      this.redactEnabled &&
+      (this.mode === "secret-value" || this.mode === "secret-quoted-value");
+
+    if (quoted) {
+      const end = text.indexOf(this.valueQuote);
+      if (end < 0) {
+        // The value goes on: its content is dropped as it arrives, and the
+        // placeholder goes out as soon as the value is known to hold
+        // something.
+        if (!secret) {
+          this.releaseTokens(text);
+        } else if (!this.valueMasked && text.length > 0) {
+          this.release(REDACTION_PLACEHOLDER);
+          this.valueMasked = true;
+        }
+        this.pending = "";
+        return true;
+      }
+      // The value ends here. An empty value is not a secret, and neither is
+      // one that is already the placeholder.
+      if (!secret) {
+        this.releaseTokens(text.slice(0, end));
+      } else if (!this.valueMasked && end > 0) {
+        this.release(REDACTION_PLACEHOLDER);
+      }
+      this.pending = text.slice(end);
+      this.mode = "normal";
+      this.valueMasked = false;
+      return true;
+    }
+
+    const end = /[\s,;}]/.exec(text);
+    if (!end) {
+      // The value goes on: its content is dropped as it arrives, and the
+      // placeholder goes out as soon as the value is known to hold
+      // something.
+      if (!secret) {
+        this.releaseTokens(text);
+      } else if (!this.valueMasked) {
+        this.release(REDACTION_PLACEHOLDER);
+        this.valueMasked = true;
+      }
+      this.pending = "";
+      return true;
+    }
+    if (!secret) {
+      this.releaseTokens(text.slice(0, end.index));
+    } else if (!this.valueMasked && end.index > 0) {
+      this.release(REDACTION_PLACEHOLDER);
+    }
+    this.pending = text.slice(end.index);
+    this.mode = "normal";
+    this.valueMasked = false;
+    return true;
+  }
+
+  /** A token is arriving: it is held until it ends. */
+  private lexToken(): boolean {
+    const text = this.pending;
+    const end = text.search(/[^A-Za-z0-9_.-]/);
+    if (end < 0) {
+      // The token may still grow.
+      return false;
+    }
+    this.releaseTokens(this.pending.slice(0, end));
+    this.pending = text.slice(end);
+    this.mode = "normal";
+    return true;
+  }
+
+  /** The body of a private key block is arriving: it is dropped. */
+  private lexKey(): boolean {
+    const text = this.pending;
+    const end = new RegExp(PRIVATE_KEY_END).exec(text);
+    if (!end) {
+      // The block is still open: its body is dropped, and only enough is
+      // kept to recognise an END marker that arrives in two pieces.
+      this.pending = text.slice(-64);
+      return false;
+    }
+    // The block ends here: the marker is part of the block, so it is
+    // dropped with it.
+    this.pending = text.slice(end.index + end[0].length);
+    this.mode = "normal";
+    return true;
+  }
+
   /**
-   * Mask a piece of text and keep it.
+   * The start of the run of name characters at the tail of the text.
    *
-   * Only the tail of the released output is kept, because the preview is
-   * the tail of the output.
+   * A trailing quote is held with it: the quote can close a name whose
+   * opening quote and name arrived earlier, and a name that is split cannot
+   * be recognised.
    */
+  private runStart(): number {
+    let index = this.pending.length;
+    let quote = false;
+    const last = this.pending[index - 1];
+    if (last === '"' || last === "'") {
+      quote = true;
+      index -= 1;
+    }
+    while (index > 0 && NAME_CHARACTER.test(this.pending[index - 1])) {
+      index -= 1;
+    }
+    if (index === this.pending.length) {
+      return -1;
+    }
+    // The quote is held with the run: the quote can close a name, and the
+    // quote that opens one is part of it.
+    return quote ? Math.max(0, index - 1) : index;
+  }
+
+  /**
+   * Release text that is not part of an assignment: it is masked with the
+   * token shapes alone.
+   */
+  private releaseTokens(text: string): void {
+    if (!text) {
+      return;
+    }
+    this.emitted = `${this.emitted}${this.redactEnabled ? maskTokens(text) : text}`.slice(
+      -REDACTED_PREVIEW_LIMIT
+    );
+  }
+
+  /** Release text that is already masked. */
   private release(text: string): void {
     if (!text) {
       return;
     }
-    this.emitted = `${this.emitted}${this.mask(text)}`.slice(-REDACTED_PREVIEW_LIMIT);
-  }
-
-  private mask(text: string): string {
-    return this.redactEnabled ? redactSecrets(text) : text;
+    this.emitted = `${this.emitted}${text}`.slice(-REDACTED_PREVIEW_LIMIT);
   }
 
   private preview(): string {
-    // While a key block is open, the held text is its body: it is a secret,
-    // so it is not shown at all. While an assignment's value is arriving,
-    // the held text is the rest of the value, and it is masked already.
+    // While a key block is open, or the value of an assignment is arriving,
+    // the held text is a secret: it is not shown at all.
     const held =
-      this.mode === "in-value" || this.mode === "in-key" ? "" : this.mask(this.pending);
+      this.mode === "secret-value" ||
+      this.mode === "secret-quoted-value" ||
+      this.mode === "key"
+        ? ""
+        : this.redactEnabled
+          ? maskTokens(this.pending)
+          : this.pending;
     return `${this.emitted}${held}`.slice(-REDACTED_PREVIEW_LIMIT).trim();
   }
 }
