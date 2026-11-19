@@ -1,6 +1,7 @@
 import { type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import { type IDisposable, type Terminal } from "xterm";
 import { type SessionSocketLike } from "../../lib/api";
+import { broadcastInput, useBroadcastStore } from "../../store/broadcast-store";
 import { type SessionConnectionState, type SessionTransport } from "../../types/session";
 
 export interface TerminalContextMenuPosition {
@@ -47,6 +48,8 @@ export function pasteIntoTerminal(terminal: ClipboardTerminal, notify: (message:
 }
 
 interface TerminalPaneInputWiringOptions {
+  /** This pane's id, so a broadcast always includes the pane being typed in. */
+  paneId: string;
   commandBufferRef: MutableRefObject<string>;
   connectionStateRef: MutableRefObject<SessionConnectionState>;
   container: HTMLDivElement;
@@ -68,6 +71,7 @@ interface TerminalPaneInputWiring {
 }
 
 export function attachTerminalPaneInputWiring({
+  paneId,
   commandBufferRef,
   connectionStateRef,
   container,
@@ -106,13 +110,25 @@ export function attachTerminalPaneInputWiring({
   });
 
   const dataDisposable = terminal.onData((data) => {
-    if (
-      transportRef.current !== "mock" &&
-      transportRef.current !== "unsupported" &&
-      socketRef.current?.readyState === WebSocket.OPEN
-    ) {
-      socketRef.current.send(JSON.stringify({ type: "input", data }));
-      return;
+    if (transportRef.current !== "mock" && transportRef.current !== "unsupported") {
+      // A broadcast sends what was typed to every pane taking part, so the
+      // same command can be run on several hosts at once. It is off by
+      // default and says so on screen while it is on.
+      const broadcast = useBroadcastStore.getState();
+      if (broadcast.enabled) {
+        // The other panes taking part get the input as well. The pane being
+        // typed in is NOT one of them: it sends to its own session below, so
+        // its input never depends on the broadcast reaching it, and it is
+        // never delivered twice.
+        broadcastInput(
+          broadcast.paneIds.filter((candidate) => candidate !== paneId),
+          data
+        );
+      }
+      if (socketRef.current?.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify({ type: "input", data }));
+        return;
+      }
     }
 
     if (connectionStateRef.current !== "connected") {

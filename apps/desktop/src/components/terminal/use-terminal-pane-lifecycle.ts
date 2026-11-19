@@ -13,6 +13,7 @@ import {
   attachTerminalPaneConnectionControls,
   initializeTerminalPaneTransport,
 } from "./terminal-pane-connection-controls";
+import { registerBroadcastSender } from "../../store/broadcast-store";
 import {
   attachTerminalPaneInputWiring,
   type TerminalContextMenuPosition,
@@ -346,7 +347,18 @@ export function useTerminalPaneLifecycle({
       terminal.writeln(line);
     });
 
+    // A pane joins the broadcast by registering a sender for its own input.
+    // The sender reads the socket when it is called, so it always sends to the
+    // session the pane has NOW, not the one it had when it registered.
+    const unregisterBroadcastSender = registerBroadcastSender(id, (data) => {
+      const socket = socketRef.current;
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "input", data }));
+      }
+    });
+
     const { contextMenuHandler, dataDisposable, selectionDisposable } = attachTerminalPaneInputWiring({
+      paneId: id,
       commandBufferRef,
       connectionStateRef,
       container,
@@ -368,6 +380,7 @@ export function useTerminalPaneLifecycle({
     void initializeTerminalPaneTransport(connectionControlsOptions);
 
     return () => {
+      unregisterBroadcastSender();
       cleanupTerminalPaneLifecycle({
         clearReconnectTimer,
         container,
