@@ -230,6 +230,24 @@ describe("the session history and secrets", () => {
     expect(entry?.outputPreview).toBe('password="[redacted]"');
   });
 
+  it("finishes the output of a command when it goes quiet", () => {
+    // The output of a command stops when the command is over, so a quiet
+    // period is the signal that what was written is all there will be.
+    vi.useFakeTimers();
+    try {
+      const entry = recordOutput('password="secret with spaces');
+
+      vi.advanceTimersByTime(2_000);
+
+      const finished = useSessionsStore
+        .getState()
+        .commandHistory.find((candidate) => candidate.id === entry?.id);
+      expect(finished?.outputPreview).toBe('password="[redacted]" with spaces');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("leaves the output alone when the user turns redaction off", () => {
     useAppStore.setState({ redactCommandOutput: false });
     const entry = recordOutput("AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIK7MDENGbPxRfiCY");

@@ -71,6 +71,42 @@ function limitCommandHistory(commandHistory: SessionCommandHistoryEntry[]) {
 // persisted.
 const outputRedactors = new Map<string, OutputRedactor>();
 
+// How long the output of a command has to be quiet before it is treated as
+// finished. A command that prints nothing more is over, and a value that
+// was still open is masked the way the whole-text redaction masks it.
+const OUTPUT_QUIET_MS = 1_500;
+
+const outputFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** Forget the timer that finishes the output of an entry. */
+function cancelOutputFlush(entryId: string) {
+  const timer = outputFlushTimers.get(entryId);
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    outputFlushTimers.delete(entryId);
+  }
+}
+
+/**
+ * Schedule the end of the output of an entry.
+ *
+ * The output of a command stops when the command is over, so a quiet period
+ * is the signal that what was written is all there will be.
+ */
+function scheduleOutputFlush(entryId: string, flush: () => void) {
+  cancelOutputFlush(entryId);
+  const timer = setTimeout(() => {
+    outputFlushTimers.delete(entryId);
+    flush();
+  }, OUTPUT_QUIET_MS);
+  // The timer must not keep the process alive.
+  const unref = (timer as unknown as { unref?: () => void }).unref;
+  if (typeof unref === "function") {
+    unref.call(timer);
+  }
+  outputFlushTimers.set(entryId, timer);
+}
+
 /**
  * Finish the output of the commands of a pane.
  *
@@ -107,6 +143,7 @@ function forgetDroppedCommandOutput(commandHistory: SessionCommandHistoryEntry[]
   for (const entryId of outputRedactors.keys()) {
     if (!held.has(entryId)) {
       outputRedactors.delete(entryId);
+      cancelOutputFlush(entryId);
     }
   }
 }
@@ -880,7 +917,19 @@ export const useSessionsStore = create<SessionsState>()(
           redactor.setRedactionEnabled(redact);
           outputRedactors.set(entryId, redactor);
 
-          return setPaneCommandHistoryOutput(state, entryId, redactor.append(output));
+          const next = setPaneCommandHistoryOutput(state, entryId, redactor.append(output));
+          // The output of a command is over when it goes quiet, so a value
+          // that was still open is masked the way the whole-text redaction
+          // masks it.
+          scheduleOutputFlush(entryId, () => {
+            const current = get();
+            const entry = current.commandHistory.find((candidate) => candidate.id === entryId);
+            if (!entry) {
+              return;
+            }
+            set(setPaneCommandHistoryOutput(current, entryId, redactor.flush()));
+          });
+          return next;
         });
       },
       clearCommandHistory: () => {
