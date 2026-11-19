@@ -264,22 +264,22 @@ const NAME_CHARACTER = /[A-Za-z0-9_.-]/;
 // The prefixes a run can start with and still be a token, and the least a
 // token can be after its prefix: the shortest run the whole-text
 // redaction's own token shapes would mask.
-const TOKEN_PREFIXES: Array<{ prefix: string; minimum: number }> = [
-  { prefix: "AKIA", minimum: 16 },
-  { prefix: "ASIA", minimum: 16 },
-  { prefix: "ghp_", minimum: 16 },
-  { prefix: "gho_", minimum: 16 },
-  { prefix: "ghu_", minimum: 16 },
-  { prefix: "ghs_", minimum: 16 },
-  { prefix: "ghr_", minimum: 16 },
-  { prefix: "github_pat_", minimum: 20 },
-  { prefix: "glpat-", minimum: 20 },
-  { prefix: "xoxa-", minimum: 10 },
-  { prefix: "xoxb-", minimum: 10 },
-  { prefix: "xoxp-", minimum: 10 },
-  { prefix: "xoxr-", minimum: 10 },
-  { prefix: "xoxs-", minimum: 10 },
-  { prefix: "eyJ", minimum: 26 },
+const TOKEN_PREFIXES: string[] = [
+  "AKIA",
+  "ASIA",
+  "ghp_",
+  "gho_",
+  "ghu_",
+  "ghs_",
+  "ghr_",
+  "github_pat_",
+  "glpat-",
+  "xoxa-",
+  "xoxb_",
+  "xoxp_",
+  "xoxr_",
+  "xoxs_",
+  "eyJ",
 ];
 
 /**
@@ -397,19 +397,29 @@ function privateKeyHeaderState(text: string): "complete" | "partial" | "none" {
  * token that is released too early leaves its tail in the preview.
  */
 function isTokenRun(run: string): boolean {
-  return TOKEN_PREFIXES.some(({ prefix }) => run.startsWith(prefix));
+  return TOKEN_PREFIXES.some((prefix) => run.startsWith(prefix));
 }
 
 /**
- * Whether a run of name characters is long enough to be a token.
+ * Whether a run of name characters is a token and nothing else.
  *
- * The placeholder is only used for a run that the whole-text redaction
- * would mask: a bare "ghp_" is not a token, and hiding it would hide text
- * that is not a secret.
+ * The placeholder is only used for text that IS a token: a bare "ghp_" is
+ * not one, and hiding it would hide text that is not a secret. The
+ * whole-text token shapes are used, so a run that is the right length but
+ * the wrong shape — "eyJ" without the three segments of a JSON web token,
+ * an AWS key id in lower case — is left alone as well.
+ *
+ * The shapes need a boundary after the token, so a delimiter is added to
+ * see whether the run would be masked.
  */
-function isCompleteTokenRun(run: string): boolean {
-  for (const { prefix, minimum } of TOKEN_PREFIXES) {
-    if (run.startsWith(prefix) && run.length >= prefix.length + minimum) {
+function isWholeTokenRun(run: string): boolean {
+  const probe = `${run} `;
+  for (const pattern of TOKEN_PATTERNS) {
+    if (pattern.source.includes("PRIVATE KEY")) {
+      continue;
+    }
+    const shape = new RegExp(`^(?:${pattern.source}) $`, pattern.flags.replace("g", ""));
+    if (shape.test(probe)) {
       return true;
     }
   }
@@ -494,6 +504,7 @@ export class OutputRedactor {
     | "plain-quoted-value"
     | "drop-run"
     | "drop-value"
+    | "drop-quoted-value"
     | "key" = "normal";
   /** The quote that opened the value, when the value is quoted. */
   private valueQuote = "";
@@ -550,9 +561,12 @@ export class OutputRedactor {
       } else {
         this.releaseTokens(value);
       }
-      this.pending = bare ? this.pending.slice(bare.index) : "";
-      this.mode = "normal";
-      this.valueMasked = false;
+      // The text after the value is ordinary text, the way the whole-text
+      // redaction reads it.
+      this.releaseTokens(bare ? this.pending.slice(bare.index) : "");
+      this.pending = "";
+      // The value stays OPEN: output that arrives after this is still part
+      // of it, and it is still masked.
     }
     return this.preview();
   }
@@ -629,7 +643,8 @@ export class OutputRedactor {
         // so. The rest of the value is dropped as well, so that the words
         // of the secret cannot reach the preview.
         this.release(REDACTION_PLACEHOLDER);
-        this.mode = "drop-value";
+        this.mode =
+          this.mode === "secret-quoted-value" ? "drop-quoted-value" : "drop-value";
         this.valueMasked = false;
         return;
       case "key":
@@ -674,6 +689,9 @@ export class OutputRedactor {
           break;
         case "drop-value":
           progressed = this.lexDropValue();
+          break;
+        case "drop-quoted-value":
+          progressed = this.lexDropQuotedValue();
           break;
         case "key":
           progressed = this.lexKey();
@@ -926,6 +944,27 @@ export class OutputRedactor {
     return true;
   }
 
+  /**
+   * The rest of a quoted value that was given up on is arriving: it is
+   * dropped.
+   *
+   * A space inside the quotes does not end the value, so the dropping goes
+   * on until the closing quote.
+   */
+  private lexDropQuotedValue(): boolean {
+    const end = this.closingQuote(this.pending);
+    if (end < 0) {
+      if (this.pending.length === 0) {
+        return false;
+      }
+      this.pending = "";
+      return true;
+    }
+    this.pending = this.pending.slice(end + 1);
+    this.mode = "normal";
+    return true;
+  }
+
   /** The body of a private key block is arriving: it is dropped. */
   private lexKey(): boolean {
     const text = this.pending;
@@ -1025,7 +1064,7 @@ export class OutputRedactor {
           ? // A run that is a token is shown as the placeholder: masking
             // only the tail of it would leave the tail of a long token in
             // the preview.
-            isCompleteTokenRun(this.pending)
+            isWholeTokenRun(this.pending)
             ? REDACTION_PLACEHOLDER
             : // The whole of the held text is masked, not only its tail: a
               // token inside it needs the text in front of it to be

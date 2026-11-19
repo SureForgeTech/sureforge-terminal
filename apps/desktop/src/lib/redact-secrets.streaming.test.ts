@@ -259,10 +259,39 @@ describe("redacting a stream of output", () => {
     }
   });
 
+  it("never shows the words of a quoted secret that is given up on", () => {
+    // A space inside the quotes does not end the value, so the dropping goes
+    // on until the closing quote.
+    const redactor = new OutputRedactor();
+    const text = `password="${"A".repeat(70_000)} secret words with spaces"`;
+    for (let index = 0; index < text.length; index += 1_000) {
+      redactor.append(text.slice(index, index + 1_000));
+    }
+
+    expect(redactor.append("")).not.toContain("secret words");
+  });
+
+  it("keeps masking a value after the output was finished", () => {
+    // The output of a command can go quiet and then carry on. Finishing it
+    // must not let the words of the secret out.
+    const redactor = new OutputRedactor();
+    redactor.append('password="secret');
+    redactor.flush();
+    redactor.append(' with spaces"');
+
+    expect(redactor.append("")).not.toContain("with spaces");
+  });
+
   it("leaves a run that is too short to be a token alone", () => {
     // The token shapes have their own lengths: "ghp_abcdefghij" is not a
     // GitHub token, and hiding it would hide text that is not a secret.
-    for (const text of ["ghp_abcdefghij", "AKIA1234567890", "eyJabcdefghij"]) {
+    for (const text of [
+      "ghp_abcdefghij",
+      "AKIA1234567890",
+      "eyJabcdefghij",
+      `eyJ${"A".repeat(26)}`,
+      "AKIAabcdefghijklmnop",
+    ]) {
       const redactor = new OutputRedactor();
       redactor.append(text);
 

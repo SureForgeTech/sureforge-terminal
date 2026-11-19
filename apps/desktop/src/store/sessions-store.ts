@@ -835,7 +835,8 @@ export const useSessionsStore = create<SessionsState>()(
         closeBackendSessionsForPanes(get().panes, paneIds);
         
         set((state) => {
-          let nextState = { ...state };
+          // The panes are closing, so the output of their commands is over.
+          let nextState = finishPaneOutput(state, paneIds);
           // Find tabs that contain these panes and remove the panes
           for (const tab of nextState.tabs) {
             const overlap = tab.paneIds.filter(id => paneIds.includes(id));

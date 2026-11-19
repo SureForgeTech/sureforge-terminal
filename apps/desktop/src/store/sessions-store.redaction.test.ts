@@ -248,6 +248,26 @@ describe("the session history and secrets", () => {
     }
   });
 
+  it("finishes the output of a command when its host's panes close", () => {
+    // The cascade path closes the panes of a host; the output of their
+    // commands is over too.
+    const tabId = useSessionsStore.getState().openSession(sampleHosts[0]);
+    const paneId = useSessionsStore.getState().tabs.find((tab) => tab.id === tabId)?.paneIds[0];
+    if (!paneId) {
+      throw new Error("no pane");
+    }
+
+    const entryId = useSessionsStore.getState().recordPaneCommand(paneId, "cat .env");
+    useSessionsStore.getState().appendCommandOutput(entryId as string, 'password="secret');
+
+    useSessionsStore.getState().closePanesForHost(sampleHosts[0].id);
+
+    const entry = useSessionsStore
+      .getState()
+      .commandHistory.find((candidate) => candidate.id === entryId);
+    expect(entry?.outputPreview).toBe('password="[redacted]"');
+  });
+
   it("leaves the output alone when the user turns redaction off", () => {
     useAppStore.setState({ redactCommandOutput: false });
     const entry = recordOutput("AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIK7MDENGbPxRfiCY");
