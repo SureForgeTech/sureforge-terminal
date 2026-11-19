@@ -44,6 +44,15 @@ describe("redacting secrets", () => {
     );
   });
 
+  it("masks a credential named after a password, however short the name", () => {
+    // "pass" is a credential name as much as "password" is.
+    expect(redactSecrets("pass=synthetic-value")).toBe(`pass=${REDACTION_PLACEHOLDER}`);
+    expect(redactSecrets("passwd=synthetic-value")).toBe(`passwd=${REDACTION_PLACEHOLDER}`);
+    expect(redactSecrets("passphrase=synthetic-value")).toBe(
+      `passphrase=${REDACTION_PLACEHOLDER}`
+    );
+  });
+
   it("masks the token shapes that are secrets by construction", () => {
     expect(redactSecrets("AKIAIOSFODNN7EXAMPLE")).toBe(REDACTION_PLACEHOLDER);
     expect(redactSecrets("ghp_abcdefghijklmnopqrstuvwxyz012345")).toBe(REDACTION_PLACEHOLDER);

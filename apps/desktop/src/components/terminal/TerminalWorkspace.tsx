@@ -16,6 +16,7 @@ import { hostSupportsPortForwarding, type HostRecord } from "../../types/host";
 import { ErrorBoundary, ScopedErrorFallback } from "../ErrorBoundary";
 import { EmptyState } from "../common/EmptyState";
 import { PortForwardPanel } from "./PortForwardPanel";
+import { isBroadcastButtonDisabled, useBroadcastMembership } from "./broadcast-membership";
 import { selectLiveBroadcastPanes } from "./broadcast-participants";
 import { SplitLayout } from "./SplitLayout";
 import { TerminalPane } from "./TerminalPane";
@@ -37,10 +38,8 @@ export function TerminalWorkspace({ launchHost }: TerminalWorkspaceProps) {
   const duplicateSession = useSessionsStore((state) => state.duplicateSession);
   // Broadcast: what you type goes to every pane taking part, so the same
   // command can be run on several hosts at once. It is off by default.
-  const broadcastEnabled = useBroadcastStore((state) => state.enabled);
   const setBroadcastEnabled = useBroadcastStore((state) => state.setEnabled);
   const setBroadcastPanes = useBroadcastStore((state) => state.setAllPanes);
-  const broadcastPaneIds = useBroadcastStore((state) => state.paneIds);
   // The broadcast reaches the PANES that are actually live: a pane whose
   // session is connected and whose terminal is on screen. A restored tab
   // that is not open, a pane still waiting for a secret and a mock session
@@ -61,19 +60,10 @@ export function TerminalWorkspace({ launchHost }: TerminalWorkspaceProps) {
     },
     [sessionPanes, senderCount]
   );
-  const livePaneKey = livePaneIds.join(",");
   // The membership follows the live panes: a session that opens joins the
   // broadcast, and a session that closes leaves it. Without this the banner
   // would count a session the broadcast does not reach.
-  useEffect(() => {
-    if (!broadcastEnabled) {
-      return;
-    }
-    if (livePaneKey !== broadcastPaneIds.join(",")) {
-      setBroadcastPanes(livePaneIds);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the key is the stable value of the list
-  }, [broadcastEnabled, livePaneKey]);
+  const { broadcastEnabled, broadcastPaneIds } = useBroadcastMembership(livePaneIds);
   const selectTab = useSessionsStore((state) => state.selectTab);
   const splitTab = useSessionsStore((state) => state.splitTab);
   const closePane = useSessionsStore((state) => state.closePane);
@@ -204,7 +194,7 @@ export function TerminalWorkspace({ launchHost }: TerminalWorkspaceProps) {
                 // The two-session rule applies to turning the broadcast ON.
                 // While it is on, the button stays usable: a pane that
                 // closed must not leave the user unable to turn it off.
-                disabled={!broadcastEnabled && livePaneIds.length < 2}
+                disabled={isBroadcastButtonDisabled(broadcastEnabled, livePaneIds.length)}
                 onClick={() => {
                   const next = !broadcastEnabled;
                   // Turning it on sends to every live pane; turning it off

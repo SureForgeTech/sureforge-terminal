@@ -16,7 +16,7 @@ import {
   type SplitDirection,
 } from "../types/session";
 import { closeSession } from "../lib/backend-runtime";
-import { redactSecrets } from "../lib/redact-secrets";
+import { OutputRedactor } from "../lib/redact-secrets";
 import { useAppStore } from "./app-store";
 
 /**
@@ -59,34 +59,29 @@ function limitCommandHistory(commandHistory: SessionCommandHistoryEntry[]) {
   return commandHistory.slice(0, SESSION_HISTORY_LIMIT);
 }
 
-// The raw output of each history entry, kept in memory only.
+// The redactor of each history entry, kept in memory only.
 //
 // The redaction has to see a command's output as a WHOLE: the terminal
 // streams it in pieces, and a secret split across two pieces — "password="
 // in one, the value in the next — is only a secret once the pieces are
-// joined. So the raw text is kept here, in memory, and the preview that
-// goes into the store (and into the local storage the store is written to)
-// is always the redacted form of the whole output.
+// joined. The redactor holds the pieces until it can recognise the secret,
+// and hands back the redacted preview of everything so far.
 //
-// The raw text never enters the store state, so it cannot be persisted.
-const rawCommandOutput = new Map<string, string>();
-
-// How much raw output to keep per entry. The preview keeps the last 600
-// characters, so this is generous; it bounds what a long-running command can
-// hold in memory. The tail is kept, because the preview is the tail.
-const RAW_COMMAND_OUTPUT_LIMIT = 64 * 1024;
+// The redactor never enters the store state, so what it holds cannot be
+// persisted.
+const outputRedactors = new Map<string, OutputRedactor>();
 
 /**
- * Forget the raw output of entries the history no longer holds.
+ * Forget the redactor of entries the history no longer holds.
  *
- * The raw buffer is keyed by history entry, so an entry the history drops
+ * The redactors are keyed by history entry, so an entry the history drops
  * would otherwise leave its output behind for the rest of the session.
  */
 function forgetDroppedCommandOutput(commandHistory: SessionCommandHistoryEntry[]) {
   const held = new Set(commandHistory.map((entry) => entry.id));
-  for (const entryId of rawCommandOutput.keys()) {
+  for (const entryId of outputRedactors.keys()) {
     if (!held.has(entryId)) {
-      rawCommandOutput.delete(entryId);
+      outputRedactors.delete(entryId);
     }
   }
 }
@@ -829,27 +824,19 @@ export const useSessionsStore = create<SessionsState>()(
         // session, and a redacted command would run as something else.
         const redact = useAppStore.getState().redactCommandOutput;
         set((state) => {
-          // The output arrives in pieces. The pieces are joined first and
-          // redacted as a whole, so a secret that straddles two pieces is
-          // still caught — and the ANSI codes are stripped before the
-          // redaction, so a coloured "password=" is still a "password=".
-          const raw = `${rawCommandOutput.get(entryId) ?? ""}${output}`;
-          const kept =
-            raw.length > RAW_COMMAND_OUTPUT_LIMIT
-              ? raw.slice(-RAW_COMMAND_OUTPUT_LIMIT)
-              : raw;
-          rawCommandOutput.set(entryId, kept);
+          // The output arrives in pieces. The pieces are held by the
+          // redactor until it can recognise a secret that straddles them,
+          // and the preview is always the redacted form of everything seen
+          // so far.
+          const redactor = outputRedactors.get(entryId) ?? new OutputRedactor(redact);
+          redactor.setRedactionEnabled(redact);
+          outputRedactors.set(entryId, redactor);
 
-          const normalized = normalizeCommandHistoryOutput(kept);
-          return setPaneCommandHistoryOutput(
-            state,
-            entryId,
-            redact ? redactSecrets(normalized) : normalized
-          );
+          return setPaneCommandHistoryOutput(state, entryId, redactor.append(output));
         });
       },
       clearCommandHistory: () => {
-        rawCommandOutput.clear();
+        outputRedactors.clear();
         set(() => ({ commandHistory: [] }));
       },
       queueCommandForHosts: (hosts, command, label) => {

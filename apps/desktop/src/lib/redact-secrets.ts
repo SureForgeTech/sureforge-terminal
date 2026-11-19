@@ -28,6 +28,7 @@ export const REDACTION_PLACEHOLDER = "[redacted]";
 const SECRET_WORDS = new Set([
   "password",
   "passwd",
+  "pass",
   "passphrase",
   "secret",
   "token",
@@ -54,8 +55,11 @@ const SECRET_KEY_QUALIFIERS = new Set([
 // KEY=value, "key": "value", key: value — the name is captured on its own so
 // it can be checked word by word, and the separator is captured so the
 // replacement keeps the shape of the text.
+// The name is bounded: an unbounded one is QUADRATIC on a long line of
+// output (the engine tries every name length at every position), and a
+// 70 kB base64 blob would take seconds to redact.
 const ASSIGNMENT_PATTERN =
-  /(["']?)([A-Za-z0-9_][A-Za-z0-9_.-]*)\1(\s*[:=]\s*)("[^"\n]*"|'[^'\n]*'|[^\s,;}]+)/g;
+  /(["']?)([A-Za-z0-9_][A-Za-z0-9_.-]{0,63})\1(\s*[:=]\s*)("[^"\n]*"|'[^'\n]*'|[^\s,;}]+)/g;
 
 // Well-known token shapes. Each is long enough and specific enough that a
 // false positive is very unlikely.
@@ -74,6 +78,11 @@ const TOKEN_PATTERNS: RegExp[] = [
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
   // A private key block.
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+  // A private key block that has NOT ended yet: the closed-block pattern
+  // cannot match it, so its body would sit in the preview unhidden until
+  // the block ends. It runs after the closed pattern, so a finished block
+  // is already gone by then.
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*$/g,
 ];
 
 /**
@@ -193,4 +202,150 @@ export function containsSecret(text: string): boolean {
     return false;
   }
   return redactSecrets(text) !== text;
+}
+
+// The escape codes a terminal writes around its output, and the bell.
+const ANSI_ESCAPE_CHARACTER = String.fromCharCode(27);
+const TERMINAL_BELL_CHARACTER = String.fromCharCode(7);
+const ANSI_ESCAPE_SEQUENCE_REGEX = new RegExp(
+  `${ANSI_ESCAPE_CHARACTER}\\[[0-9;?]*[ -/]*[@-~]`,
+  "g"
+);
+const TERMINAL_BELL_REGEX = new RegExp(TERMINAL_BELL_CHARACTER, "g");
+
+/** How much of the redacted output the preview keeps. */
+export const REDACTED_PREVIEW_LIMIT = 600;
+
+// A private key block, open or closed.
+const PRIVATE_KEY_BEGIN = "-----BEGIN";
+const PRIVATE_KEY_END = "-----END";
+
+/**
+ * Whether a line ends in a way that says a value follows it.
+ *
+ * "password=" at the end of a line means the value is on the next one, so a
+ * cut there would hide the value from the name it belongs to.
+ */
+function endsWithAssignment(text: string): boolean {
+  return /[:=]\s*$/.test(text);
+}
+
+/**
+ * The place the text can be cut so that no construct spans the cut.
+ *
+ * The cut is a line boundary, because no construct spans a line: a value
+ * ends at the whitespace, and a token has no whitespace in it. Two things
+ * move it: a line that ends with an assignment separator (the value is on
+ * the next line) and a private key block, which spans lines — so the cut
+ * goes past a closed block, or is held back in front of an open one.
+ */
+function findSafeCut(text: string): number {
+  // The key block positions are found once: the walk below must not rescan
+  // the whole text for every candidate.
+  const begin = text.lastIndexOf(PRIVATE_KEY_BEGIN);
+  const end = text.lastIndexOf(PRIVATE_KEY_END);
+  const blockOpen = begin >= 0 && end < begin;
+
+  let cut = text.lastIndexOf("\n") + 1;
+  while (cut > 0) {
+    // The cut must not be the end of an assignment: the value follows it.
+    const lineStart = text.lastIndexOf("\n", cut - 2) + 1;
+    if (!endsWithAssignment(text.slice(lineStart, cut))) {
+      if (begin >= 0 && cut > begin) {
+        if (blockOpen) {
+          // The block is still open: it has to stay whole, so the cut goes
+          // in front of it.
+          cut = text.lastIndexOf("\n", begin - 1) + 1;
+          continue;
+        }
+        // The block is closed: the cut has to be after its END line, or the
+        // block would be split between the two halves.
+        const endOfBlock = text.indexOf("\n", end);
+        if (endOfBlock < 0) {
+          return 0;
+        }
+        if (cut <= endOfBlock) {
+          cut = endOfBlock + 1;
+          continue;
+        }
+      }
+      return cut;
+    }
+    cut = text.lastIndexOf("\n", cut - 2) + 1;
+  }
+  return 0;
+}
+
+/**
+ * Keeps the redacted preview of a stream of output.
+ *
+ * The output arrives in pieces and is unbounded, so it cannot simply be held
+ * whole; and a secret may straddle two pieces, so the redaction has to see
+ * enough context to recognise it. The stream therefore keeps two parts:
+ *
+ * - the FINALIZED part, already redacted, which cannot change any more
+ *   because it was cut where no construct spans it;
+ * - the PENDING part, the raw tail a construct may still span, which is
+ *   redacted as a whole every time it grows.
+ *
+ * The finalized part is trimmed to the size of the preview, and the pending
+ * part is bounded by a line (and by an open private key block), so what a
+ * long-running command holds in memory stays bounded.
+ */
+export class OutputRedactor {
+  private finalized = "";
+  private pending = "";
+  private redact: boolean;
+
+  constructor(redact: boolean = true) {
+    this.redact = redact;
+  }
+
+  /**
+   * Turn the redaction on or off.
+   *
+   * The setting is a preference the user can change while a command runs,
+   * so the next piece of output follows the new setting.
+   */
+  setRedactionEnabled(redact: boolean) {
+    this.redact = redact;
+  }
+
+  /**
+   * Add a piece of output, and return the redacted preview of everything
+   * seen so far.
+   */
+  append(chunk: string): string {
+    this.pending += stripTerminalCodes(chunk);
+
+    const cut = findSafeCut(this.pending);
+    if (cut > 0) {
+      this.finalized = `${this.finalized}${this.mask(this.pending.slice(0, cut))}`.slice(
+        -REDACTED_PREVIEW_LIMIT
+      );
+      this.pending = this.pending.slice(cut);
+    }
+
+    return `${this.finalized}${this.mask(this.pending)}`
+      .slice(-REDACTED_PREVIEW_LIMIT)
+      .trim();
+  }
+
+  private mask(text: string): string {
+    return this.redact ? redactSecrets(text) : text;
+  }
+}
+
+/**
+ * The terminal's own codes, stripped.
+ *
+ * The escape codes are stripped BEFORE the redaction, so a coloured
+ * "password=" is still a "password=" and a secret that a colour code split
+ * in half is still found.
+ */
+export function stripTerminalCodes(text: string): string {
+  return text
+    .replace(ANSI_ESCAPE_SEQUENCE_REGEX, "")
+    .replace(/\r/g, "")
+    .replace(TERMINAL_BELL_REGEX, "");
 }

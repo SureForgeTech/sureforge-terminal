@@ -87,6 +87,37 @@ describe("the session history and secrets", () => {
     const entry = recordOutputInChunks(["ghp_abcdefghijklmnop", "qrstuvwxyz012345"]);
 
     expect(entry.outputPreview).not.toContain("ghp_abcdefghijklmnop");
+    // The tail of the token must be gone too: the preview may keep the
+    // placeholder, but not the rest of the token.
+    expect(entry.outputPreview).not.toContain("qrstuvwxyz012345");
+    expect(entry.outputPreview).toContain("[redacted]");
+  });
+
+  it("keeps a private key block out of the preview however long it is", () => {
+    // The output is cut where the preview is cut, and the cut is made where
+    // no construct spans it — so a key block that is longer than any buffer
+    // is still recognised as a block and not as a wall of base64.
+    const body = "A".repeat(70_000);
+    const entry = recordOutputInChunks([
+      `-----BEGIN RSA PRIVATE KEY-----\n${body.slice(0, 35_000)}`,
+      `${body.slice(35_000)}\n-----END RSA PRIVATE KEY-----`,
+    ]);
+
+    expect(entry.outputPreview).not.toMatch(/A{100}/);
+    expect(entry.outputPreview).toContain("[redacted]");
+  });
+
+  it("keeps a secret out of the preview when the output around it is long", () => {
+    // The same boundary, with a credential on a line of its own: the cut
+    // falls between the lines, so the name and the value stay together and
+    // the credential is still masked.
+    const filler = "log line\n".repeat(20_000);
+    const entry = recordOutputInChunks([
+      `${filler}password=synthetic-value\n`,
+      "tail\n",
+    ]);
+
+    expect(entry.outputPreview).not.toContain("synthetic-value");
     expect(entry.outputPreview).toContain("[redacted]");
   });
 

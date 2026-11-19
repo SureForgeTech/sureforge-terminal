@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useGroupSettingsStore } from "../../store/group-settings-store";
 import { useHostsStore } from "../../store/hosts-store";
 import { useKnownHostsStore } from "../../store/known-hosts-store";
 import type { HostRecord } from "../../types/host";
@@ -110,6 +111,43 @@ describe("createTerminalPaneNativeSessionController", () => {
     createBackendSession.mockReset();
     getProtocolRuntimeStatus.mockResolvedValue({ available: true, message: "ready" });
     openBackendSessionSocket.mockReset();
+  });
+
+  it("carries the host's group into the connection", async () => {
+    // The group's settings hang off the group, so a connection built without
+    // it silently loses the group's user name, bastion, environment and SFTP
+    // root — on every fresh session.
+    useGroupSettingsStore
+      .getState()
+      .setGroupSettings("Acme / Production", {
+        username: "ops-from-group",
+        sftpRoot: "/srv/app",
+        environment: { REGION: "eu-west-1" },
+      });
+    createBackendSession.mockResolvedValueOnce({ sessionId: "session-1" });
+    openBackendSessionSocket.mockResolvedValue(new FakeSocket());
+
+    const controller = makeController(vi.fn(), {
+      readLatestHost: () =>
+        ({
+          id: "host-1",
+          group: "Acme / Production",
+          jumpHostId: undefined,
+        }) as never,
+      sftpRoot: "",
+      username: "",
+    });
+
+    await controller.connectNativeSession();
+
+    const connection = createBackendSession.mock.calls[0]?.[0] as
+      | { username?: string; sftpRoot?: string; environment?: Record<string, string> }
+      | undefined;
+    expect(connection?.username).toBe("ops-from-group");
+    expect(connection?.sftpRoot).toBe("/srv/app");
+    expect(connection?.environment).toEqual({ REGION: "eu-west-1" });
+
+    useGroupSettingsStore.getState().clearGroupSettings("Acme / Production");
   });
 
   it("schedules a reconnect end to end when a connected socket closes", async () => {

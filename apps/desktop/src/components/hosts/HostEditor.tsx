@@ -689,11 +689,15 @@ function HostEditorContent({
               const group = event.target.value;
               setValues((current) => {
                 const groupSftpRoot = groupSettingsFor(groupSettings, group.trim())?.sftpRoot?.trim();
-                // The form starts with the default SFTP root. A group that
-                // supplies one takes it over, so the host inherits instead
-                // of carrying a root it never chose.
+                // The form starts with the default SFTP root, and a group
+                // that supplies one takes it over — so a NEW host inherits
+                // instead of carrying a root it never chose. An existing
+                // host keeps its own value: a root it was given is not the
+                // form's default, and only the host itself may change it.
                 const sftpRoot =
-                  groupSftpRoot && current.sftpRoot === "/home" ? "" : current.sftpRoot;
+                  !host && groupSftpRoot && current.sftpRoot === "/home"
+                    ? ""
+                    : current.sftpRoot;
                 return { ...current, group, sftpRoot };
               });
             }}

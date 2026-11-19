@@ -87,7 +87,7 @@ function resolveSftpRoot(value: string, group: string): string {
   }
   const groupSftpRoot = useGroupSettingsStore
     .getState()
-    .groupSettings[group]?.sftpRoot?.trim();
+    .groupSettings[group.trim()]?.sftpRoot?.trim();
   return groupSftpRoot ? "" : "/home";
 }
 
