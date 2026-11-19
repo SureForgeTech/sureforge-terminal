@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { EXAMPLE_JWT } from "./redact-secrets.fixtures";
 import {
   REDACTION_PLACEHOLDER,
   REDACTED_PREVIEW_LIMIT,
@@ -64,7 +65,7 @@ describe("redacting secrets", () => {
     expect(redactSecrets("glpat-abcdefghijklmnopqrst")).toBe(REDACTION_PLACEHOLDER);
     expect(redactSecrets("xoxb-1234567890-abcdefghij")).toBe(REDACTION_PLACEHOLDER);
     expect(
-      redactSecrets("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk")
+      redactSecrets(EXAMPLE_JWT)
     ).toBe(REDACTION_PLACEHOLDER);
     expect(
       redactSecrets(

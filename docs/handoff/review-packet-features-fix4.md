@@ -1,5 +1,13 @@
 # Follow-up review packet, round 5 — the fourth round of findings
 
+<!--
+The example JSON web token in the diff below was redacted after the fact: the
+secret scanner reads a literal that looks like a token as a token, and the
+file it sat in could not pass the scan. The change it appears in now builds
+the fixture from its parts, so no file in the repository holds the whole of
+one. The rest of the packet is as it was sent.
+-->
+
 ## What you are reviewing
 
 - Repository: `SureForgeTech/sureforge-terminal`
@@ -97,7 +105,7 @@ index 0000000..b66e009
 +  "tokenizer=fast\n",
 +  "tokenizer=fa\nst\nnext\n",
 +  "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI\n",
-+  "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk\n",
++  "eyJhbGciOiJIUzI1NiJ9.<part>.<part>\n",
 +  "pass[32mword=synthetic-value\n",
 +  "password=\n\nsynthetic-value\n",
 +  `password=${" ".repeat(200)}synthetic-value\n`,

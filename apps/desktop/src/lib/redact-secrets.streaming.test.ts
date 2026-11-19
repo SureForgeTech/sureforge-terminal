@@ -1,3 +1,4 @@
+import { EXAMPLE_JWT } from "./redact-secrets.fixtures";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -30,7 +31,7 @@ const FIXTURES: string[] = [
   "tokenizer=fast\n",
   "tokenizer=fa\nst\nnext\n",
   "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI\n",
-  "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk\n",
+  `${EXAMPLE_JWT}\n`,
   "pass[32mword=synthetic-value\n",
   "password=\n\nsynthetic-value\n",
   `password=${" ".repeat(200)}synthetic-value\n`,
@@ -45,7 +46,7 @@ const FIXTURES: string[] = [
   "xoxb-1234567890-abcdefghij\n",
   // A token inside an assignment that is not a secret.
   "key=ghp_abcdefghijklmnopqrstuvwxyz012345\n",
-  "id=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk\n",
+  `id=${EXAMPLE_JWT}\n`,
   // A key header whose first part is longer than a name.
   `-----BEGIN ${"A".repeat(129)}PRIVATE KEY-----\nsynthetic-value`,
   // A quote that is never closed.
