@@ -77,6 +77,36 @@ Supporting evidence, read live from the API:
 
 No other credential was sought and no settings were changed.
 
+**Re-checked with a freshly refreshed token (2026-11-19, after the host rotated `/var/lib/opencode-github/github.token` at 08:08 UTC).** The token is valid — `gh auth status` reports `Logged in to github.com account abd-oss-lane[bot]` and API reads succeed — but the App installation still does not cover this repository:
+
+```
+$ gh api repos/SureForgeTech/sureforge-terminal --jq '.permissions'
+{"admin":false,"maintain":false,"pull":false,"push":false,"triage":false}
+
+$ gh api /installation/repositories --paginate --jq '.repositories[].full_name'
+SureForgeTech/sureforge-1min
+SureForgeTech/sureforge-capture
+SureForgeTech/sureforge-cfr
+SureForgeTech/sureforge-fm-data-api
+SureForgeTech/sureforge-fm-mcp
+SureForgeTech/sureforge-fm-snippets
+SureForgeTech/sureforge-jira-mcp
+SureForgeTech/sureforge-policy-public
+SureForgeTech/sureforge-release-mcp
+SureForgeTech/sureforge-zendesk
+SureForgeTech/sureforgetech
+```
+
+`sureforge-terminal` is not among the eleven. The push therefore fails with the same 403 whatever the token's freshness:
+
+```
+$ git push origin wip/sureforge-terminal-features
+remote: Permission to SureForgeTech/sureforge-terminal.git denied to abd-oss-lane[bot].
+fatal: unable to access 'https://github.com/SureForgeTech/sureforge-terminal.git/': The requested URL returned error: 403
+```
+
+**The one action that unblocks a push from this sandbox** is to add `SureForgeTech/sureforge-terminal` to the existing `abd-oss-lane[bot]` App installation (organization settings -> the App -> Configure -> add the repository), or to push the branch from an account that already has write access. The branch is ready: `wip/sureforge-terminal-features` at `cf35158`, which contains the reviewed head `1d9a61c` plus the handoff files.
+
 ## Ignored / untracked files that matter
 
 From `git status --ignored --short` — all build output, none of it is work:
