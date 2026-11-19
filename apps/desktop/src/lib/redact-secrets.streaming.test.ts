@@ -43,6 +43,14 @@ const FIXTURES: string[] = [
   "a=b c=d\n",
   "AKIAIOSFODNN7EXAMPLE\n",
   "xoxb-1234567890-abcdefghij\n",
+  // A token inside an assignment that is not a secret.
+  "key=ghp_abcdefghijklmnopqrstuvwxyz012345\n",
+  "id=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk\n",
+  // A key header whose first part is longer than a name.
+  `-----BEGIN ${"A".repeat(129)}PRIVATE KEY-----\nsynthetic-value`,
+  // A quote that is never closed.
+  'password="secret with spaces\n',
+  "password='unclosed\n",
 ];
 
 /** The preview of the whole output, the way the whole-text redaction gives it. */
@@ -140,6 +148,20 @@ describe("redacting a stream of output", () => {
 
     expect(redactor.heldLength).toBeLessThanOrEqual(64);
     expect(redactor.append("")).toBe("[redacted]");
+  });
+
+  it("does not grow with a token that never ends", () => {
+    // A run that starts with a token prefix is held until it ends. A run
+    // that never ends must not grow the process without bound, and the
+    // cost of a piece must not grow with the run.
+    const redactor = new OutputRedactor();
+    const started = Date.now();
+    for (let index = 0; index < 2_000; index += 1) {
+      redactor.append(`eyJ${"A".repeat(97)}`);
+    }
+
+    expect(redactor.heldLength).toBeLessThanOrEqual(64 * 1024);
+    expect(Date.now() - started).toBeLessThan(5_000);
   });
 
   it("starts again when the redaction is turned on or off", () => {

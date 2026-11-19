@@ -252,6 +252,12 @@ const PRIVATE_KEY_END = "-----END [A-Z ]*PRIVATE KEY-----";
 // credential name, so it is never held back waiting for one.
 const MAX_CREDENTIAL_NAME_LENGTH = 64;
 
+// How much text the redactor holds back before it gives up on precision
+// and masks what it holds. A construct that grows without an end — a token
+// that never stops, a header that never completes — is the only thing that
+// can reach it.
+const MAX_HELD_TEXT = 64 * 1024;
+
 // The characters a name, a token or a key marker is made of.
 const NAME_CHARACTER = /[A-Za-z0-9_.-]/;
 
@@ -358,21 +364,22 @@ function privateKeyHeaderState(text: string): "complete" | "partial" | "none" {
   const literal = "PRIVATE KEY-----";
   const rest = text.slice("-----BEGIN ".length);
 
-  // The "[A-Z ]*" part may take any number of characters, so the header
-  // can be split in more than one way. The loop is bounded: a header whose
-  // first part is longer than this is not a header.
-  for (let consumed = 0; consumed <= rest.length && consumed <= 128; consumed += 1) {
-    const head = rest.slice(0, consumed);
+  // The header is complete when the literal follows a run of capitals and
+  // spaces. The run may be of any length, so the whole-text pattern is used
+  // here rather than a bound.
+  if (new RegExp(`^[A-Z ]*${literal}`).test(rest)) {
+    return "complete";
+  }
+
+  // It may still become one when what is left is the start of the literal.
+  // The literal is short, so only the last few places the "[A-Z ]*" part
+  // can end are worth looking at.
+  for (let split = Math.max(0, rest.length - literal.length); split <= rest.length; split += 1) {
+    const head = rest.slice(0, split);
     if (!/^[A-Z ]*$/.test(head)) {
-      break;
+      continue;
     }
-    // The header is complete when the literal follows the "[A-Z ]*" part.
-    if (rest.startsWith(literal, consumed)) {
-      return "complete";
-    }
-    // It may still become one when what follows is the start of the
-    // literal and the text ends there.
-    const tail = rest.slice(consumed);
+    const tail = rest.slice(split);
     if (tail.length < literal.length && literal.startsWith(tail)) {
       return "partial";
     }
@@ -389,6 +396,25 @@ function privateKeyHeaderState(text: string): "complete" | "partial" | "none" {
  */
 function isTokenRun(run: string): boolean {
   return TOKEN_PREFIXES.some((prefix) => run.startsWith(prefix));
+}
+
+/**
+ * The masked form of a value, the way the whole-text redaction masks it.
+ *
+ * A quoted value keeps its quotes around the placeholder, and a value that
+ * is empty — or one that is already the placeholder — is left alone.
+ */
+function maskedValue(value: string): string {
+  const inner = value.startsWith('"')
+    ? value.slice(1, -1)
+    : value.startsWith("'")
+      ? value.slice(1, -1)
+      : value;
+  if (!inner || inner === REDACTION_PLACEHOLDER) {
+    return value;
+  }
+  const quote = value.startsWith('"') ? '"' : value.startsWith("'") ? "'" : "";
+  return `${quote}${REDACTION_PLACEHOLDER}${quote}`;
 }
 
 /**
@@ -410,10 +436,9 @@ function isTokenRun(run: string): boolean {
  * - SECRET-VALUE / SECRET-QUOTED-VALUE: the value of a secret assignment.
  *   It is one secret, so it is masked and dropped as it arrives.
  * - PLAIN-VALUE / PLAIN-QUOTED-VALUE: the value of an assignment that is
- *   not a secret. It is released as it arrives, but it is still consumed as
- *   one thing, so a construct inside it is not picked up a second time.
- * - TOKEN: a token that may still grow. It is held until it ends, and then
- *   masked as a whole.
+ *   not a secret. It is held until it ends and released as one thing, so
+ *   that a token inside it is masked as a whole and a construct inside it
+ *   is not picked up a second time.
  * - KEY: the body of a private key block. It is masked and dropped as it
  *   arrives, so a key block of any length costs nothing.
  *
@@ -434,12 +459,13 @@ export class OutputRedactor {
     | "secret-quoted-value"
     | "plain-value"
     | "plain-quoted-value"
-    | "token"
     | "key" = "normal";
   /** The quote that opened the value, when the value is quoted. */
   private valueQuote = "";
-  /** Whether the value's content has already been masked and dropped. */
+  /** Whether the value's placeholder has already been released. */
   private valueMasked = false;
+  /** Where the run of name characters at the tail of the text starts. */
+  private runStartCache = -1;
   private redactEnabled: boolean;
 
   constructor(redact: boolean = true) {
@@ -492,12 +518,42 @@ export class OutputRedactor {
       // The text in front of an unfinished escape sequence may be part of a
       // name, so nothing is released until the sequence completes.
       this.pending += text;
+      this.guardHeldText();
       return this.preview();
     }
 
     this.pending += text;
     this.lex();
+    this.guardHeldText();
     return this.preview();
+  }
+
+  /**
+   * Give up on precision when too much is held back.
+   *
+   * The held text is what could still change, and it is small by
+   * construction — except for a construct that grows without an end, like a
+   * token that never stops or a header that never completes. When that
+   * happens, the held text is masked and the rest of the construct is
+   * dropped: the preview says less than it could, never more.
+   */
+  private guardHeldText(): void {
+    if (this.pending.length <= MAX_HELD_TEXT) {
+      return;
+    }
+    const held = this.pending;
+    this.pending = "";
+    this.release(REDACTION_PLACEHOLDER);
+    if (this.mode === "plain-value" || this.mode === "plain-quoted-value") {
+      this.mode = "normal";
+    }
+    if (this.mode === "key") {
+      return;
+    }
+    // The rest of a construct that grows without an end is dropped.
+    if (held.includes("-----BEGIN")) {
+      this.mode = "key";
+    }
   }
 
   /** Read as much of the held text as can be read. */
@@ -519,9 +575,6 @@ export class OutputRedactor {
         case "plain-quoted-value":
           progressed = this.lexValue();
           break;
-        case "token":
-          progressed = this.lexToken();
-          break;
         case "key":
           progressed = this.lexKey();
           break;
@@ -531,13 +584,11 @@ export class OutputRedactor {
 
   /** The text between the constructs: it is released, masked as tokens. */
   private lexNormal(): boolean {
-    const assignment = findAssignment(this.pending);
-
     // A private key block comes first: its marker is not a name, and its
     // body is dropped as it arrives. With the redaction off it is ordinary
     // text.
     const keyStart = this.redactEnabled ? this.pending.indexOf("-----BEGIN") : -1;
-    if (keyStart >= 0 && (!assignment || keyStart < assignment.nameStart)) {
+    if (keyStart >= 0) {
       const header = privateKeyHeaderState(this.pending.slice(keyStart));
       if (header === "partial") {
         // The header is not complete yet: it may still be one.
@@ -557,6 +608,8 @@ export class OutputRedactor {
       return true;
     }
 
+    const assignment = findAssignment(this.pending);
+
     if (assignment) {
       const quoted =
         this.pending[assignment.nameStart - 1] === '"' ||
@@ -570,9 +623,8 @@ export class OutputRedactor {
       this.releaseTokens(this.pending.slice(0, start));
       this.releaseTokens(this.pending.slice(start, assignment.separator + 1));
       this.pending = this.pending.slice(assignment.separator + 1);
-      // A secret assignment's value is masked; an ordinary one is released
-      // as it arrives, but it is consumed as one thing so that a construct
-      // inside it is not picked up a second time.
+      // A secret assignment's value is masked; an ordinary one is held
+      // until it ends, so that a token inside it is masked as a whole.
       this.mode = secret ? "awaiting-value" : "plain-value";
       return true;
     }
@@ -585,13 +637,14 @@ export class OutputRedactor {
         // The token may still grow: it is held until it ends.
         this.releaseTokens(this.pending.slice(0, runStart));
         this.pending = this.pending.slice(runStart);
-        this.mode = "token";
-        return true;
+        this.runStartCache = 0;
+        return false;
       }
       if (run.length <= MAX_CREDENTIAL_NAME_LENGTH) {
         // The run may still become the name of a credential.
         this.releaseTokens(this.pending.slice(0, runStart));
         this.pending = this.pending.slice(runStart);
+        this.runStartCache = 0;
         return false;
       }
     }
@@ -626,15 +679,11 @@ export class OutputRedactor {
       return true;
     }
 
-    if (character === '"' || character === "'") {
-      this.releaseTokens(character);
-      this.pending = text.slice(1);
-      this.valueQuote = character;
-      this.mode = "secret-quoted-value";
-      return true;
-    }
-
-    this.mode = "secret-value";
+    // The value starts here. It is held until it ends, so that the masked
+    // form is the same as the whole-text redaction's — the quotes around a
+    // value are part of it.
+    this.valueQuote = character === '"' || character === "'" ? character : "";
+    this.mode = this.valueQuote ? "secret-quoted-value" : "secret-value";
     return true;
   }
 
@@ -645,77 +694,95 @@ export class OutputRedactor {
       return false;
     }
 
+    // An ordinary assignment's value may be quoted: the whole-text
+    // redaction reads it as one thing, so it is read as one here too.
+    if (this.mode === "plain-value" && !this.valueQuote) {
+      const first = text[0];
+      if (first === '"' || first === "'") {
+        this.valueQuote = first;
+        this.mode = "plain-quoted-value";
+        return true;
+      }
+    }
+
     const quoted =
       this.mode === "secret-quoted-value" || this.mode === "plain-quoted-value";
     const secret =
       this.redactEnabled &&
       (this.mode === "secret-value" || this.mode === "secret-quoted-value");
 
+    // The value's extent: a quoted value ends at its closing quote, and a
+    // bare value at the first whitespace or delimiter. A quote that is
+    // never closed ends the value at the first whitespace instead, which is
+    // what the whole-text redaction does with it.
+    let end: number;
     if (quoted) {
-      const end = text.indexOf(this.valueQuote);
-      if (end < 0) {
-        // The value goes on: its content is dropped as it arrives, and the
-        // placeholder goes out as soon as the value is known to hold
-        // something.
-        if (!secret) {
-          this.releaseTokens(text);
-        } else if (!this.valueMasked && text.length > 0) {
-          this.release(REDACTION_PLACEHOLDER);
-          this.valueMasked = true;
+      const closing = this.closingQuote(text);
+      if (closing >= 0) {
+        // The closing quote is part of the value: the whole-text redaction
+        // keeps the quotes around the placeholder.
+        end = closing + 1;
+      } else if (text.includes("\n")) {
+        // A newline before the closing quote: the whole-text redaction's
+        // quoted pattern cannot span a line, so the value falls back to the
+        // bare one, which ends at the first whitespace.
+        const bare = /[\s,;}]/.exec(text);
+        if (!bare) {
+          return false;
         }
-        this.pending = "";
-        return true;
+        end = bare.index;
+      } else {
+        // The closing quote may still arrive: the value is held.
+        return false;
       }
-      // The value ends here. An empty value is not a secret, and neither is
-      // one that is already the placeholder.
-      if (!secret) {
-        this.releaseTokens(text.slice(0, end));
-      } else if (!this.valueMasked && end > 0) {
-        this.release(REDACTION_PLACEHOLDER);
+    } else {
+      const bare = /[\s,;}]/.exec(text);
+      if (!bare) {
+        // The value goes on.
+        return false;
       }
-      this.pending = text.slice(end);
-      this.mode = "normal";
-      this.valueMasked = false;
-      return true;
+      end = bare.index;
     }
 
-    const end = /[\s,;}]/.exec(text);
-    if (!end) {
-      // The value goes on: its content is dropped as it arrives, and the
-      // placeholder goes out as soon as the value is known to hold
-      // something.
-      if (!secret) {
-        this.releaseTokens(text);
-      } else if (!this.valueMasked) {
-        this.release(REDACTION_PLACEHOLDER);
-        this.valueMasked = true;
-      }
-      this.pending = "";
-      return true;
-    }
+    // The value ends here: it is released as one thing, so that a token
+    // inside it is masked as a whole and the masked form is the same as the
+    // whole-text redaction's.
+    const value = text.slice(0, end);
     if (!secret) {
-      this.releaseTokens(text.slice(0, end.index));
-    } else if (!this.valueMasked && end.index > 0) {
-      this.release(REDACTION_PLACEHOLDER);
+      this.releaseTokens(value);
+    } else {
+      this.release(maskedValue(value));
     }
-    this.pending = text.slice(end.index);
+    this.pending = text.slice(end);
     this.mode = "normal";
     this.valueMasked = false;
     return true;
   }
 
-  /** A token is arriving: it is held until it ends. */
-  private lexToken(): boolean {
-    const text = this.pending;
-    const end = text.search(/[^A-Za-z0-9_.-]/);
-    if (end < 0) {
-      // The token may still grow.
-      return false;
+  /**
+   * The closing quote of a quoted value, if there is one.
+   *
+   * A quote that is never closed ends the value at the first whitespace
+   * instead: the whole-text redaction's quoted pattern cannot span a line,
+   * so it falls back to the bare value.
+   */
+  private closingQuote(text: string): number {
+    if (!this.valueQuote) {
+      return -1;
     }
-    this.releaseTokens(this.pending.slice(0, end));
-    this.pending = text.slice(end);
-    this.mode = "normal";
-    return true;
+    const end = text.indexOf(this.valueQuote, 1);
+    if (end < 0) {
+      return -1;
+    }
+    if (text.slice(0, end).includes("\n")) {
+      return -1;
+    }
+    return end;
+  }
+
+  /** The value's quote, when it has one. */
+  private get hasValueQuote(): boolean {
+    return this.valueQuote !== "";
   }
 
   /** The body of a private key block is arriving: it is dropped. */
@@ -741,24 +808,43 @@ export class OutputRedactor {
    * A trailing quote is held with it: the quote can close a name whose
    * opening quote and name arrived earlier, and a name that is split cannot
    * be recognised.
+   *
+   * The start is remembered rather than found again: the text only grows at
+   * the end, so the run does not move until the text in front of it is
+   * released — and a run that grows without an end would otherwise be
+   * scanned again for every piece.
    */
   private runStart(): number {
+    const last = this.pending[this.pending.length - 1];
+    if (last === undefined) {
+      return -1;
+    }
+
     let index = this.pending.length;
     let quote = false;
-    const last = this.pending[index - 1];
     if (last === '"' || last === "'") {
       quote = true;
       index -= 1;
+    } else if (!NAME_CHARACTER.test(last)) {
+      // The run ended here.
+      this.runStartCache = -1;
+      return -1;
     }
-    while (index > 0 && NAME_CHARACTER.test(this.pending[index - 1])) {
-      index -= 1;
+
+    let start = this.runStartCache;
+    if (start < 0 || start > index) {
+      start = index;
+      while (start > 0 && NAME_CHARACTER.test(this.pending[start - 1])) {
+        start -= 1;
+      }
+      this.runStartCache = start;
     }
-    if (index === this.pending.length) {
+    if (start === index) {
       return -1;
     }
     // The quote is held with the run: the quote can close a name, and the
     // quote that opens one is part of it.
-    return quote ? Math.max(0, index - 1) : index;
+    return quote ? Math.max(0, start - 1) : start;
   }
 
   /**
@@ -786,12 +872,23 @@ export class OutputRedactor {
     // While a key block is open, or the value of an assignment is arriving,
     // the held text is a secret: it is not shown at all.
     const held =
-      this.mode === "secret-value" ||
-      this.mode === "secret-quoted-value" ||
-      this.mode === "key"
-        ? ""
-        : this.redactEnabled
-          ? maskTokens(this.pending)
+      this.mode === "secret-value" || this.mode === "secret-quoted-value"
+        ? // The value is a secret and is not shown, but the preview says it
+          // is masked, the way the whole-text redaction says it.
+          this.pending.length > 0
+          ? REDACTION_PLACEHOLDER
+          : ""
+        : this.mode === "key"
+          ? ""
+          : this.redactEnabled
+          ? // Only the tail of the held text is shown, so only the tail is
+            // masked: the cost of a piece of output must not grow with the
+            // text held back.
+            maskTokens(
+              this.pending.length > REDACTED_PREVIEW_LIMIT
+                ? this.pending.slice(-REDACTED_PREVIEW_LIMIT)
+                : this.pending
+            )
           : this.pending;
     return `${this.emitted}${held}`.slice(-REDACTED_PREVIEW_LIMIT).trim();
   }
