@@ -261,27 +261,25 @@ const MAX_HELD_TEXT = 64 * 1024;
 // The characters a name, a token or a key marker is made of.
 const NAME_CHARACTER = /[A-Za-z0-9_.-]/;
 
-// The least a token can be, after its prefix: the shortest run the
-// whole-text redaction's token shapes would mask.
-const MIN_TOKEN_LENGTH = 10;
-
-// The prefixes a run can start with and still be a token.
-const TOKEN_PREFIXES = [
-  "AKIA",
-  "ASIA",
-  "ghp_",
-  "gho_",
-  "ghu_",
-  "ghs_",
-  "ghr_",
-  "github_pat_",
-  "glpat-",
-  "xoxa-",
-  "xoxb-",
-  "xoxp-",
-  "xoxr-",
-  "xoxs-",
-  "eyJ",
+// The prefixes a run can start with and still be a token, and the least a
+// token can be after its prefix: the shortest run the whole-text
+// redaction's own token shapes would mask.
+const TOKEN_PREFIXES: Array<{ prefix: string; minimum: number }> = [
+  { prefix: "AKIA", minimum: 16 },
+  { prefix: "ASIA", minimum: 16 },
+  { prefix: "ghp_", minimum: 16 },
+  { prefix: "gho_", minimum: 16 },
+  { prefix: "ghu_", minimum: 16 },
+  { prefix: "ghs_", minimum: 16 },
+  { prefix: "ghr_", minimum: 16 },
+  { prefix: "github_pat_", minimum: 20 },
+  { prefix: "glpat-", minimum: 20 },
+  { prefix: "xoxa-", minimum: 10 },
+  { prefix: "xoxb-", minimum: 10 },
+  { prefix: "xoxp-", minimum: 10 },
+  { prefix: "xoxr-", minimum: 10 },
+  { prefix: "xoxs-", minimum: 10 },
+  { prefix: "eyJ", minimum: 26 },
 ];
 
 /**
@@ -399,7 +397,7 @@ function privateKeyHeaderState(text: string): "complete" | "partial" | "none" {
  * token that is released too early leaves its tail in the preview.
  */
 function isTokenRun(run: string): boolean {
-  return TOKEN_PREFIXES.some((prefix) => run.startsWith(prefix));
+  return TOKEN_PREFIXES.some(({ prefix }) => run.startsWith(prefix));
 }
 
 /**
@@ -410,15 +408,27 @@ function isTokenRun(run: string): boolean {
  * that is not a secret.
  */
 function isCompleteTokenRun(run: string): boolean {
-  for (const prefix of TOKEN_PREFIXES) {
-    if (!run.startsWith(prefix)) {
-      continue;
-    }
-    if (run.length >= prefix.length + MIN_TOKEN_LENGTH) {
+  for (const { prefix, minimum } of TOKEN_PREFIXES) {
+    if (run.startsWith(prefix) && run.length >= prefix.length + minimum) {
       return true;
     }
   }
   return false;
+}
+
+/**
+ * Whether the text ends with a run that could be a token.
+ *
+ * The safety valve uses this to tell an ordinary value from one that ends
+ * in a token: the tail of a token must be dropped, and ordinary text must
+ * not be.
+ */
+function endsWithTokenRun(text: string): boolean {
+  let index = text.length;
+  while (index > 0 && NAME_CHARACTER.test(text[index - 1])) {
+    index -= 1;
+  }
+  return index < text.length && isTokenRun(text.slice(index));
 }
 
 /**
@@ -608,18 +618,18 @@ export class OutputRedactor {
       case "plain-value":
       case "plain-quoted-value":
         // An ordinary value is not a secret: it is released as it is, so
-        // that nothing is lost. A token inside it is masked, and the rest
-        // of the value is dropped, so that the tail of a token cannot reach
-        // the preview.
+        // that nothing is lost. A token inside it is masked, and the tail
+        // of a token is dropped, so that it cannot reach the preview.
         this.releaseTokens(`${held}\n`.replace(/\n$/, ""));
-        this.mode = "drop-value";
+        this.mode = endsWithTokenRun(held) ? "drop-run" : "normal";
         return;
       case "secret-value":
       case "secret-quoted-value":
         // The value is a secret: it is dropped, and the placeholder says
-        // so.
+        // so. The rest of the value is dropped as well, so that the words
+        // of the secret cannot reach the preview.
         this.release(REDACTION_PLACEHOLDER);
-        this.mode = "normal";
+        this.mode = "drop-value";
         this.valueMasked = false;
         return;
       case "key":

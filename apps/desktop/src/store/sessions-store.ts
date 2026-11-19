@@ -72,6 +72,31 @@ function limitCommandHistory(commandHistory: SessionCommandHistoryEntry[]) {
 const outputRedactors = new Map<string, OutputRedactor>();
 
 /**
+ * Finish the output of the commands of a pane.
+ *
+ * A value that was still open when the command's output ended is masked the
+ * way the whole-text redaction masks it, so that what is kept is the same
+ * as if the output had arrived in one piece.
+ */
+function finishPaneOutput(
+  state: SessionWorkspaceState & { commandHistory: SessionCommandHistoryEntry[] },
+  paneIds: string[]
+): SessionWorkspaceState & { commandHistory: SessionCommandHistoryEntry[] } {
+  let finished = state;
+  for (const entry of finished.commandHistory) {
+    if (!paneIds.includes(entry.paneId)) {
+      continue;
+    }
+    const redactor = outputRedactors.get(entry.id);
+    if (!redactor) {
+      continue;
+    }
+    finished = setPaneCommandHistoryOutput(finished, entry.id, redactor.flush());
+  }
+  return finished;
+}
+
+/**
  * Forget the redactor of entries the history no longer holds.
  *
  * The redactors are keyed by history entry, so an entry the history drops
@@ -758,7 +783,11 @@ export const useSessionsStore = create<SessionsState>()(
         if (tab) {
           closeBackendSessionsForPanes(panes, tab.paneIds);
         }
-        set((state) => closeSessionTab(state, tabId));
+        set((state) => {
+          // The tab is closing, so the output of its commands is over.
+          const finished = tab ? finishPaneOutput(state, tab.paneIds) : state;
+          return closeSessionTab(finished, tabId);
+        });
       },
       splitTab: (tabId, host) => set((state) => splitSessionPane(state, tabId, host)),
       closePanesForHost: (hostId) => {
@@ -794,7 +823,11 @@ export const useSessionsStore = create<SessionsState>()(
       },
       closePane: (tabId, paneId) => {
         closeBackendSessionsForPanes(get().panes, [paneId]);
-        set((state) => removeSessionPane(state, tabId, paneId));
+        set((state) => {
+          // The pane is closing, so the output of its commands is over.
+          const finished = finishPaneOutput(state, [paneId]);
+          return removeSessionPane(finished, tabId, paneId);
+        });
       },
       selectPane: (tabId, paneId) => set((state) => setActiveSessionPane(state, tabId, paneId)),
       setPaneState: (paneId, connectionState, connectionError) =>

@@ -246,6 +246,42 @@ describe("redacting a stream of output", () => {
     }
   });
 
+  it("never shows the rest of a secret value that is given up on", () => {
+    // The value is a secret, so the rest of it is dropped: the words of the
+    // secret cannot reach the preview.
+    for (const text of [`password=${"A".repeat(70_000)}`, `password="${"A".repeat(70_000)}`]) {
+      const redactor = new OutputRedactor();
+      for (let index = 0; index < text.length; index += 1_000) {
+        redactor.append(text.slice(index, index + 1_000));
+      }
+
+      expect(redactor.append("")).not.toMatch(/A{100}/);
+    }
+  });
+
+  it("leaves a run that is too short to be a token alone", () => {
+    // The token shapes have their own lengths: "ghp_abcdefghij" is not a
+    // GitHub token, and hiding it would hide text that is not a secret.
+    for (const text of ["ghp_abcdefghij", "AKIA1234567890", "eyJabcdefghij"]) {
+      const redactor = new OutputRedactor();
+      redactor.append(text);
+
+      expect(redactor.append("")).toBe(wholeTextPreview(text));
+    }
+  });
+
+  it("keeps the ordinary text that follows a value that is given up on", () => {
+    // An ordinary value is released as it is, so the text after it is not
+    // lost.
+    const redactor = new OutputRedactor();
+    const text = `key=${"x".repeat(65_540)}${"ORDINARYTAIL".repeat(100)}`;
+    for (let index = 0; index < text.length; index += 1_000) {
+      redactor.append(text.slice(index, index + 1_000));
+    }
+
+    expect(redactor.append("")).toContain("ORDINARYTAIL");
+  });
+
   it("finishes a value that was still open when the output ended", () => {
     // A quoted value that was never closed falls back to the bare value,
     // the way the whole-text redaction falls back to it.

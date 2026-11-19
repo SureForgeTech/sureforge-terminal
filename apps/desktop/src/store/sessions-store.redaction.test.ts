@@ -211,6 +211,25 @@ describe("the session history and secrets", () => {
     expect(entry?.outputPreview).not.toContain("with spaces");
   });
 
+  it("finishes the output of a command when its pane closes", () => {
+    // The pane is closing, so the output of its commands is over.
+    const tabId = useSessionsStore.getState().openSession(sampleHosts[0]);
+    const paneId = useSessionsStore.getState().tabs.find((tab) => tab.id === tabId)?.paneIds[0];
+    if (!paneId) {
+      throw new Error("no pane");
+    }
+
+    const entryId = useSessionsStore.getState().recordPaneCommand(paneId, "cat .env");
+    useSessionsStore.getState().appendCommandOutput(entryId as string, 'password="secret');
+
+    useSessionsStore.getState().closePane(tabId, paneId);
+
+    const entry = useSessionsStore
+      .getState()
+      .commandHistory.find((candidate) => candidate.id === entryId);
+    expect(entry?.outputPreview).toBe('password="[redacted]"');
+  });
+
   it("leaves the output alone when the user turns redaction off", () => {
     useAppStore.setState({ redactCommandOutput: false });
     const entry = recordOutput("AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIK7MDENGbPxRfiCY");
