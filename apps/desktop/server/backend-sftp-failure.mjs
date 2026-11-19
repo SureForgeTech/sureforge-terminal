@@ -98,10 +98,16 @@ export function sftpOperationFailureMessage(code) {
  * subsystem: sftp" — and that wording is text from the far end, which #230
  * does not let reach a client. The refusal is recognised here and replaced
  * with fixed text that names the cause, the way every other SFTP failure is.
+ *
+ * The wording is matched exactly, not loosely. A transport failure whose text
+ * mentions a subsystem — "Connection reset while negotiating subsystem", or a
+ * channel-open description from the far end — is a temporary failure, not
+ * proof that the server has no SFTP, and calling it one would tell the user
+ * their server cannot do file transfers when it only needed to try again.
  */
 export function isSftpSubsystemUnavailable(error) {
-  const message = typeof error?.message === "string" ? error.message : "";
-  return /subsystem/i.test(message);
+  const message = typeof error?.message === "string" ? error.message.trim() : "";
+  return message === "Unable to start subsystem: sftp";
 }
 
 /**

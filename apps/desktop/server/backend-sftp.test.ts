@@ -56,11 +56,34 @@ describe("the SFTP subsystem", () => {
     expect((failure as Error).message).toBe("All configured authentication methods failed");
   });
 
+  it("leaves a transport failure that mentions a subsystem alone", async () => {
+    const { withSftp } = setup(new Error("Connection reset while negotiating subsystem"));
+
+    const failure = await withSftp(
+      { hostname: "example.test" },
+      { timeoutMs: 1_000 },
+      async () => "never reached"
+    ).catch((error: unknown) => error);
+
+    expect((failure as Error).message).toBe("Connection reset while negotiating subsystem");
+  });
+
   it("recognises the refusal and not another failure", () => {
     expect(isSftpSubsystemUnavailable(new Error("Unable to start subsystem: sftp"))).toBe(true);
-    expect(isSftpSubsystemUnavailable(new Error("subsystem request failed"))).toBe(true);
     expect(isSftpSubsystemUnavailable(new Error("Connection timed out"))).toBe(false);
     expect(isSftpSubsystemUnavailable(undefined)).toBe(false);
+  });
+
+  it("does not call a transport failure a refused subsystem", () => {
+    // A temporary failure whose text mentions a subsystem is not proof that
+    // the server has no SFTP, and the channel-open description comes from
+    // the far end — so neither is matched.
+    for (const message of [
+      "Connection reset while negotiating subsystem",
+      "(SSH) Channel open failure: subsystem temporarily unavailable",
+    ]) {
+      expect(isSftpSubsystemUnavailable(new Error(message))).toBe(false);
+    }
   });
 
   it("keeps the server's own wording as the cause", () => {

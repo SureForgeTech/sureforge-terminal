@@ -10,7 +10,10 @@ import { SshAuthRefusedError } from "./backend-ssh-auth.mjs";
 import { SshConnectError } from "./backend-ssh-failure.mjs";
 import { relayableFailureCode } from "./backend-failure-codes.mjs";
 import { SftpOperationError } from "./backend-sftp-failure.mjs";
-import { InvalidForwardRequestError } from "./backend-forwards.mjs";
+import {
+  ForwardPortInUseError,
+  InvalidForwardRequestError,
+} from "./backend-forwards.mjs";
 
 /**
  * #230: raw errors are published here instead of logged. A subscriber attached
@@ -92,6 +95,7 @@ export function respondError(response, error, status = 500) {
     SshConnectError,
     SftpOperationError,
     InvalidForwardRequestError,
+    ForwardPortInUseError,
   ];
   const isRelayedType = RELAYED_TYPES.some((type) => error instanceof type);
   if (isRelayedType) {

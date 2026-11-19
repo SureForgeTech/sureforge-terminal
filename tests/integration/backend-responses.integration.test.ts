@@ -8,6 +8,8 @@ import {
   HTTP_ERROR_DIAGNOSTIC_CHANNEL,
   respondError,
 } from "../../apps/desktop/server/backend-responses.mjs";
+import { ForwardPortInUseError } from "../../apps/desktop/server/backend-forwards.mjs";
+import { SftpOperationError } from "../../apps/desktop/server/backend-sftp-failure.mjs";
 
 // #230 / CodeQL alert 18 (js/stack-trace-exposure). `respondError` used to
 // serialize `Error.message` straight into the HTTP body, so raw ssh2 and fs
@@ -52,6 +54,45 @@ describe("#230: respondError does not relay internal error text", () => {
 
     expect(response.recorded.status).toBe(500);
     expect(JSON.parse(response.recorded.body!)).toEqual({ error: "Internal server error." });
+  });
+
+  it("relays a local port that is already in use, and only that reason", () => {
+    // The user chose the port, so the failure has to say what to change:
+    // "Invalid request." names nothing they can act on.
+    const response = recordingResponse();
+
+    respondError(
+      response,
+      new ForwardPortInUseError(
+        "That local port is already in use, so the forward cannot be started. Pick another one."
+      )
+    );
+
+    expect(response.recorded.status).toBe(409);
+    expect(JSON.parse(response.recorded.body!)).toEqual({
+      error:
+        "That local port is already in use, so the forward cannot be started. Pick another one.",
+    });
+  });
+
+  it("relays a refused SFTP subsystem, and only that reason", () => {
+    // The server does not offer SFTP, so its files cannot be browsed: the
+    // client has to be told that rather than "Internal server error.".
+    const response = recordingResponse();
+
+    respondError(
+      response,
+      new SftpOperationError(
+        "That server does not offer the SFTP subsystem, so its files cannot be browsed.",
+        { statusCode: 501 }
+      )
+    );
+
+    expect(response.recorded.status).toBe(501);
+    expect(JSON.parse(response.recorded.body!)).toEqual({
+      error:
+        "That server does not offer the SFTP subsystem, so its files cannot be browsed.",
+    });
   });
 
   it("relays a refused host key's reason, and only that reason", () => {
