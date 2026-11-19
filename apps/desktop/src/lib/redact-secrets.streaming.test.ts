@@ -113,6 +113,20 @@ describe("redacting a stream of output", () => {
     expect(redactor.append("").length).toBeLessThanOrEqual(REDACTED_PREVIEW_LIMIT);
   });
 
+  it("keeps up with a long stream of small writes into a value", () => {
+    // The cost of a piece of output must not grow with the text held back:
+    // a value that is written a little, very often, must not freeze the
+    // app.
+    const redactor = new OutputRedactor();
+    redactor.append("key=");
+    const started = Date.now();
+    for (let index = 0; index < 4_000; index += 1) {
+      redactor.append("abcdefghij");
+    }
+
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
   it("keeps up with a long stream of small writes", () => {
     // The cost of a piece of output must not grow with the output seen so
     // far: a command that writes a little, very often, must not freeze the

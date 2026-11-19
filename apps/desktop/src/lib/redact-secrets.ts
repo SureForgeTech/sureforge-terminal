@@ -244,6 +244,7 @@ const INCOMPLETE_ESCAPE_TAIL_REGEX = new RegExp(
 /** How much of the redacted output the preview keeps. */
 export const REDACTED_PREVIEW_LIMIT = 600;
 
+
 // A private key block, open or closed. The whole markers are used, so that a
 // "-----BEGIN" that is not a key block is not treated as one.
 const PRIVATE_KEY_END = "-----END [A-Z ]*PRIVATE KEY-----";
@@ -1094,14 +1095,12 @@ export class OutputRedactor {
             // the preview.
             isWholeTokenRun(this.pending)
             ? REDACTION_PLACEHOLDER
-            : this.mode === "plain-value" || this.mode === "plain-quoted-value"
-              ? // An ordinary value can hold a credential, so the whole of
-                // it is masked, not only its tail.
-                this.redactEnabled ? redactSecrets(this.pending) : this.pending
-              : // A run of name characters cannot hold a credential, and a
-                // token inside it needs the text in front of it — so the
-                // token shapes are enough, and the cost stays small.
-                this.redactEnabled ? maskTokens(this.pending) : this.pending
+            : // The held text is masked with the token shapes. A token
+              // inside it needs the text in front of it, so all of the held
+              // text is masked — but with the token shapes alone, because
+              // the whole redaction over the whole of it would cost more
+              // with every piece of output.
+              this.redactEnabled ? maskTokens(this.pending) : this.pending
           : this.pending;
     return `${this.emitted}${held}`.slice(-REDACTED_PREVIEW_LIMIT).trim();
   }
