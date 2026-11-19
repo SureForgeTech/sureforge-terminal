@@ -169,6 +169,21 @@ describe("the session history and secrets", () => {
     expect(entry.command).toBe("cat .env");
   });
 
+  it("finishes the output of a command when the next one starts", () => {
+    // A quoted value that was never closed is masked the way the whole-text
+    // redaction masks it, once the output of the command is over.
+    const entry = recordOutput('password="secret with spaces');
+
+    const paneId = useSessionsStore.getState().tabs[0]?.paneIds[0];
+    expect(paneId).toBeTruthy();
+    useSessionsStore.getState().recordPaneCommand(paneId as string, "next command");
+
+    const finished = useSessionsStore
+      .getState()
+      .commandHistory.find((candidate) => candidate.id === entry?.id);
+    expect(finished?.outputPreview).toBe('password="[redacted]" with spaces');
+  });
+
   it("leaves the output alone when the user turns redaction off", () => {
     useAppStore.setState({ redactCommandOutput: false });
     const entry = recordOutput("AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIK7MDENGbPxRfiCY");

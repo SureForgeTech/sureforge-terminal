@@ -459,6 +459,7 @@ export class OutputRedactor {
     | "secret-quoted-value"
     | "plain-value"
     | "plain-quoted-value"
+    | "drop-run"
     | "key" = "normal";
   /** The quote that opened the value, when the value is quoted. */
   private valueQuote = "";
@@ -488,6 +489,38 @@ export class OutputRedactor {
     this.mode = "normal";
     this.valueQuote = "";
     this.valueMasked = false;
+  }
+
+  /**
+   * Finish the output.
+   *
+   * A value that was still open when the output ended is masked the way the
+   * whole-text redaction masks it — a quoted value that was never closed
+   * falls back to the bare value — so that what is kept is the same as if
+   * the output had arrived in one piece.
+   */
+  flush(): string {
+    if (
+      this.mode === "secret-value" ||
+      this.mode === "secret-quoted-value" ||
+      this.mode === "plain-value" ||
+      this.mode === "plain-quoted-value"
+    ) {
+      const secret =
+        this.redactEnabled &&
+        (this.mode === "secret-value" || this.mode === "secret-quoted-value");
+      const bare = /[\s,;}]/.exec(this.pending);
+      const value = bare ? this.pending.slice(0, bare.index) : this.pending;
+      if (secret) {
+        this.release(maskedValue(value));
+      } else {
+        this.releaseTokens(value);
+      }
+      this.pending = bare ? this.pending.slice(bare.index) : "";
+      this.mode = "normal";
+      this.valueMasked = false;
+    }
+    return this.preview();
   }
 
   /**
@@ -538,22 +571,47 @@ export class OutputRedactor {
    * dropped: the preview says less than it could, never more.
    */
   private guardHeldText(): void {
-    if (this.pending.length <= MAX_HELD_TEXT) {
+    if (this.pending.length + this.escapeCarry.length <= MAX_HELD_TEXT) {
       return;
     }
     const held = this.pending;
     this.pending = "";
-    this.release(REDACTION_PLACEHOLDER);
-    if (this.mode === "plain-value" || this.mode === "plain-quoted-value") {
-      this.mode = "normal";
+    // An unfinished escape sequence is dropped: it cannot be a secret on
+    // its own, and it would otherwise be held for ever.
+    this.escapeCarry = "";
+
+    switch (this.mode) {
+      case "plain-value":
+      case "plain-quoted-value":
+        // An ordinary value is not a secret: it is released as it is, so
+        // that nothing is lost.
+        this.releaseTokens(held);
+        this.mode = "normal";
+        return;
+      case "secret-value":
+      case "secret-quoted-value":
+        // The value is a secret: it is dropped, and the placeholder says
+        // so.
+        this.release(REDACTION_PLACEHOLDER);
+        this.mode = "normal";
+        this.valueMasked = false;
+        return;
+      case "key":
+        // The body of a key block is already dropped.
+        return;
+      default:
+        break;
     }
-    if (this.mode === "key") {
+
+    this.release(REDACTION_PLACEHOLDER);
+    if (held.includes("-----BEGIN")) {
+      // The rest of a key block is dropped.
+      this.mode = "key";
       return;
     }
-    // The rest of a construct that grows without an end is dropped.
-    if (held.includes("-----BEGIN")) {
-      this.mode = "key";
-    }
+    // The rest of a run is dropped, so that the tail of a token cannot
+    // reach the preview.
+    this.mode = "drop-run";
   }
 
   /** Read as much of the held text as can be read. */
@@ -574,6 +632,9 @@ export class OutputRedactor {
         case "plain-value":
         case "plain-quoted-value":
           progressed = this.lexValue();
+          break;
+        case "drop-run":
+          progressed = this.lexDropRun();
           break;
         case "key":
           progressed = this.lexKey();
@@ -785,6 +846,26 @@ export class OutputRedactor {
     return this.valueQuote !== "";
   }
 
+  /**
+   * The rest of a run that was given up on is arriving: it is dropped.
+   *
+   * The run was too long to hold, and it may be a token, so the rest of it
+   * cannot be released.
+   */
+  private lexDropRun(): boolean {
+    const end = this.pending.search(/[^A-Za-z0-9_.-]/);
+    if (end < 0) {
+      if (this.pending.length === 0) {
+        return false;
+      }
+      this.pending = "";
+      return true;
+    }
+    this.pending = this.pending.slice(end);
+    this.mode = "normal";
+    return true;
+  }
+
   /** The body of a private key block is arriving: it is dropped. */
   private lexKey(): boolean {
     const text = this.pending;
@@ -881,14 +962,19 @@ export class OutputRedactor {
         : this.mode === "key"
           ? ""
           : this.redactEnabled
-          ? // Only the tail of the held text is shown, so only the tail is
-            // masked: the cost of a piece of output must not grow with the
-            // text held back.
-            maskTokens(
-              this.pending.length > REDACTED_PREVIEW_LIMIT
-                ? this.pending.slice(-REDACTED_PREVIEW_LIMIT)
-                : this.pending
-            )
+          ? // A run that is a token is shown as the placeholder: masking
+            // only the tail of it would leave the tail of a long token in
+            // the preview.
+            isTokenRun(this.pending)
+            ? REDACTION_PLACEHOLDER
+            : // Only the tail of the held text is shown, so only the tail
+              // is masked: the cost of a piece of output must not grow with
+              // the text held back.
+              maskTokens(
+                this.pending.length > REDACTED_PREVIEW_LIMIT
+                  ? this.pending.slice(-REDACTED_PREVIEW_LIMIT)
+                  : this.pending
+              )
           : this.pending;
     return `${this.emitted}${held}`.slice(-REDACTED_PREVIEW_LIMIT).trim();
   }

@@ -814,8 +814,15 @@ export const useSessionsStore = create<SessionsState>()(
       recordPaneCommand: (paneId, command, source = "queued") => {
         const nextState = recordPaneCommandHistory(get(), paneId, command, source);
         forgetDroppedCommandOutput(nextState.commandHistory);
-        set(nextState);
-        return nextState.commandHistory[0]?.id;
+        // The output of the commands before this one is finished, so a value
+        // that was still open is masked the way the whole-text redaction
+        // masks it.
+        let finished = nextState;
+        for (const [entryId, redactor] of outputRedactors) {
+          finished = setPaneCommandHistoryOutput(finished, entryId, redactor.flush());
+        }
+        set(finished);
+        return finished.commandHistory[0]?.id;
       },
       appendCommandOutput: (entryId, output) => {
         // The preview is persisted with the history, so a secret printed by a

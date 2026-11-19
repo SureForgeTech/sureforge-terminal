@@ -82,7 +82,7 @@ describe("redacting a stream of output", () => {
   });
 
   it("gives the same preview when the output arrives in three pieces", () => {
-    for (const text of FIXTURES.filter((fixture) => fixture.length < 120).slice(0, 12)) {
+    for (const text of FIXTURES.filter((fixture) => fixture.length < 120)) {
       const expected = wholeTextPreview(text);
 
       for (let first = 1; first < text.length; first += 1) {
@@ -162,6 +162,62 @@ describe("redacting a stream of output", () => {
 
     expect(redactor.heldLength).toBeLessThanOrEqual(64 * 1024);
     expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it("never shows the tail of a token that is longer than the preview", () => {
+    // The preview is the tail of the output, so masking only the tail of
+    // the held text would leave the tail of a long token in it.
+    const redactor = new OutputRedactor();
+    redactor.append(`ghp_${"A".repeat(1_000)}`);
+
+    const preview = redactor.append("");
+    expect(preview).not.toMatch(/A{100}/);
+    expect(preview).toContain("[redacted]");
+  });
+
+  it("never shows the tail of a token that grows past the limit", () => {
+    // A run that grows without an end is given up on: the rest of it is
+    // dropped, so that the tail of a token cannot reach the preview.
+    const redactor = new OutputRedactor();
+    const text = `ghp_${"A".repeat(70_000)}`;
+    for (let index = 0; index < text.length; index += 1_000) {
+      redactor.append(text.slice(index, index + 1_000));
+    }
+
+    const preview = redactor.append("");
+    expect(preview).not.toMatch(/A{100}/);
+    expect(redactor.heldLength).toBeLessThanOrEqual(64 * 1024);
+  });
+
+  it("gives up on an escape sequence that never finishes", () => {
+    // An unfinished escape sequence is held, and it cannot be a secret on
+    // its own: it is dropped rather than held for ever.
+    const redactor = new OutputRedactor();
+    redactor.append("\u001b[");
+    for (let index = 0; index < 100; index += 1) {
+      redactor.append("1".repeat(1_000));
+    }
+
+    expect(redactor.heldLength).toBeLessThanOrEqual(64 * 1024);
+  });
+
+  it("keeps an ordinary value that is longer than the limit", () => {
+    // An ordinary value is not a secret: it is released as it is, so that
+    // nothing is lost.
+    const redactor = new OutputRedactor();
+    const text = `key=${"x".repeat(65_540)}`;
+    redactor.append(text);
+
+    expect(redactor.append("")).toBe(wholeTextPreview(text));
+  });
+
+  it("finishes a value that was still open when the output ended", () => {
+    // A quoted value that was never closed falls back to the bare value,
+    // the way the whole-text redaction falls back to it.
+    const redactor = new OutputRedactor();
+    redactor.append('password="secret with spaces');
+
+    expect(redactor.flush()).toBe(wholeTextPreview('password="secret with spaces'));
   });
 
   it("starts again when the redaction is turned on or off", () => {
