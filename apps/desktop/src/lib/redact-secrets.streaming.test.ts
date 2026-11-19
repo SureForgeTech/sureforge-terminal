@@ -127,6 +127,19 @@ describe("redacting a stream of output", () => {
     expect(Date.now() - started).toBeLessThan(5_000);
   });
 
+  it("keeps up with a long stream of small writes into a quoted value", () => {
+    // A quoted value is held until its closing quote, so the same shape of
+    // output must not cost more with every piece.
+    const redactor = new OutputRedactor();
+    redactor.append('key="');
+    const started = Date.now();
+    for (let index = 0; index < 4_000; index += 1) {
+      redactor.append("abcdefghij");
+    }
+
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
   it("keeps up with a long stream of small writes", () => {
     // The cost of a piece of output must not grow with the output seen so
     // far: a command that writes a little, very often, must not freeze the
