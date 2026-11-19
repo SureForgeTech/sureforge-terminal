@@ -184,6 +184,33 @@ describe("the session history and secrets", () => {
     expect(finished?.outputPreview).toBe('password="[redacted]" with spaces');
   });
 
+  it("does not finish the output of a command in another pane", () => {
+    // A command in one pane must not finish the open value of a command in
+    // another pane: that pane's output is still arriving.
+    const first = useSessionsStore.getState().openSession(sampleHosts[0]);
+    const second = useSessionsStore.getState().openSession(sampleHosts[1]);
+    const state = useSessionsStore.getState();
+    const firstPaneId = state.tabs.find((tab) => tab.id === first)?.paneIds[0];
+    const secondPaneId = state.tabs.find((tab) => tab.id === second)?.paneIds[0];
+    if (!firstPaneId || !secondPaneId) {
+      throw new Error("no panes");
+    }
+
+    const entryId = useSessionsStore.getState().recordPaneCommand(firstPaneId, "cat .env");
+    useSessionsStore.getState().appendCommandOutput(entryId as string, 'password="secret');
+
+    // A command in the other pane starts.
+    useSessionsStore.getState().recordPaneCommand(secondPaneId, "uptime");
+
+    // The first pane's output goes on.
+    useSessionsStore.getState().appendCommandOutput(entryId as string, ' with spaces"');
+
+    const entry = useSessionsStore
+      .getState()
+      .commandHistory.find((candidate) => candidate.id === entryId);
+    expect(entry?.outputPreview).not.toContain("with spaces");
+  });
+
   it("leaves the output alone when the user turns redaction off", () => {
     useAppStore.setState({ redactCommandOutput: false });
     const entry = recordOutput("AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIK7MDENGbPxRfiCY");

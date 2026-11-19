@@ -814,12 +814,20 @@ export const useSessionsStore = create<SessionsState>()(
       recordPaneCommand: (paneId, command, source = "queued") => {
         const nextState = recordPaneCommandHistory(get(), paneId, command, source);
         forgetDroppedCommandOutput(nextState.commandHistory);
-        // The output of the commands before this one is finished, so a value
-        // that was still open is masked the way the whole-text redaction
-        // masks it.
+        // The output of the previous command in THIS pane is finished, so a
+        // value that was still open is masked the way the whole-text
+        // redaction masks it. The commands in the other panes are still
+        // running, and their output must not be finished by this one.
         let finished = nextState;
-        for (const [entryId, redactor] of outputRedactors) {
-          finished = setPaneCommandHistoryOutput(finished, entryId, redactor.flush());
+        for (const entry of finished.commandHistory) {
+          if (entry.paneId !== paneId || entry.id === nextState.commandHistory[0]?.id) {
+            continue;
+          }
+          const redactor = outputRedactors.get(entry.id);
+          if (!redactor) {
+            continue;
+          }
+          finished = setPaneCommandHistoryOutput(finished, entry.id, redactor.flush());
         }
         set(finished);
         return finished.commandHistory[0]?.id;

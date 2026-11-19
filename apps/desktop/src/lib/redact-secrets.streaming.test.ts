@@ -211,6 +211,41 @@ describe("redacting a stream of output", () => {
     expect(redactor.append("")).toBe(wholeTextPreview(text));
   });
 
+  it("never shows a token that is inside an ordinary value", () => {
+    // The token needs the text in front of it to be recognised, so the
+    // whole of the held text is masked, not only its tail.
+    const redactor = new OutputRedactor();
+    const text = `key=prefix-${"x".repeat(100)}-ghp_${"A".repeat(1_000)}`;
+    redactor.append(text);
+
+    const preview = redactor.append("");
+    expect(preview).not.toMatch(/A{100}/);
+    expect(preview).toBe(wholeTextPreview(text));
+  });
+
+  it("never shows the tail of a token inside an ordinary value that is given up on", () => {
+    const redactor = new OutputRedactor();
+    const text = `key=ghp_${"A".repeat(70_000)}`;
+    for (let index = 0; index < text.length; index += 1_000) {
+      redactor.append(text.slice(index, index + 1_000));
+    }
+
+    const preview = redactor.append("");
+    expect(preview).not.toMatch(/A{100}/);
+    expect(preview).toContain("[redacted]");
+  });
+
+  it("leaves a token prefix that is too short to be a token alone", () => {
+    // "ghp_" is not a token, and hiding it would hide text that is not a
+    // secret.
+    for (const text of ["ghp_", "ghp_abc"]) {
+      const redactor = new OutputRedactor();
+      redactor.append(text);
+
+      expect(redactor.append("")).toBe(wholeTextPreview(text));
+    }
+  });
+
   it("finishes a value that was still open when the output ended", () => {
     // A quoted value that was never closed falls back to the bare value,
     // the way the whole-text redaction falls back to it.

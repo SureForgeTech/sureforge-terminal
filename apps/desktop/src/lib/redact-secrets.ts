@@ -261,6 +261,10 @@ const MAX_HELD_TEXT = 64 * 1024;
 // The characters a name, a token or a key marker is made of.
 const NAME_CHARACTER = /[A-Za-z0-9_.-]/;
 
+// The least a token can be, after its prefix: the shortest run the
+// whole-text redaction's token shapes would mask.
+const MIN_TOKEN_LENGTH = 10;
+
 // The prefixes a run can start with and still be a token.
 const TOKEN_PREFIXES = [
   "AKIA",
@@ -399,6 +403,25 @@ function isTokenRun(run: string): boolean {
 }
 
 /**
+ * Whether a run of name characters is long enough to be a token.
+ *
+ * The placeholder is only used for a run that the whole-text redaction
+ * would mask: a bare "ghp_" is not a token, and hiding it would hide text
+ * that is not a secret.
+ */
+function isCompleteTokenRun(run: string): boolean {
+  for (const prefix of TOKEN_PREFIXES) {
+    if (!run.startsWith(prefix)) {
+      continue;
+    }
+    if (run.length >= prefix.length + MIN_TOKEN_LENGTH) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * The masked form of a value, the way the whole-text redaction masks it.
  *
  * A quoted value keeps its quotes around the placeholder, and a value that
@@ -460,6 +483,7 @@ export class OutputRedactor {
     | "plain-value"
     | "plain-quoted-value"
     | "drop-run"
+    | "drop-value"
     | "key" = "normal";
   /** The quote that opened the value, when the value is quoted. */
   private valueQuote = "";
@@ -584,9 +608,11 @@ export class OutputRedactor {
       case "plain-value":
       case "plain-quoted-value":
         // An ordinary value is not a secret: it is released as it is, so
-        // that nothing is lost.
-        this.releaseTokens(held);
-        this.mode = "normal";
+        // that nothing is lost. A token inside it is masked, and the rest
+        // of the value is dropped, so that the tail of a token cannot reach
+        // the preview.
+        this.releaseTokens(`${held}\n`.replace(/\n$/, ""));
+        this.mode = "drop-value";
         return;
       case "secret-value":
       case "secret-quoted-value":
@@ -635,6 +661,9 @@ export class OutputRedactor {
           break;
         case "drop-run":
           progressed = this.lexDropRun();
+          break;
+        case "drop-value":
+          progressed = this.lexDropValue();
           break;
         case "key":
           progressed = this.lexKey();
@@ -866,6 +895,27 @@ export class OutputRedactor {
     return true;
   }
 
+  /**
+   * The rest of an ordinary value that was given up on is arriving: it is
+   * dropped.
+   *
+   * The value was too long to hold, and it may hold a token, so the rest of
+   * it cannot be released.
+   */
+  private lexDropValue(): boolean {
+    const end = /[\s,;}]/.exec(this.pending);
+    if (!end) {
+      if (this.pending.length === 0) {
+        return false;
+      }
+      this.pending = "";
+      return true;
+    }
+    this.pending = this.pending.slice(end.index);
+    this.mode = "normal";
+    return true;
+  }
+
   /** The body of a private key block is arriving: it is dropped. */
   private lexKey(): boolean {
     const text = this.pending;
@@ -965,16 +1015,12 @@ export class OutputRedactor {
           ? // A run that is a token is shown as the placeholder: masking
             // only the tail of it would leave the tail of a long token in
             // the preview.
-            isTokenRun(this.pending)
+            isCompleteTokenRun(this.pending)
             ? REDACTION_PLACEHOLDER
-            : // Only the tail of the held text is shown, so only the tail
-              // is masked: the cost of a piece of output must not grow with
-              // the text held back.
-              maskTokens(
-                this.pending.length > REDACTED_PREVIEW_LIMIT
-                  ? this.pending.slice(-REDACTED_PREVIEW_LIMIT)
-                  : this.pending
-              )
+            : // The whole of the held text is masked, not only its tail: a
+              // token inside it needs the text in front of it to be
+              // recognised.
+            maskTokens(this.pending)
           : this.pending;
     return `${this.emitted}${held}`.slice(-REDACTED_PREVIEW_LIMIT).trim();
   }
