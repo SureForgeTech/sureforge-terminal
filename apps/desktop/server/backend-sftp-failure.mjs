@@ -92,6 +92,33 @@ export function sftpOperationFailureMessage(code) {
 }
 
 /**
+ * Whether the server refused to open the SFTP subsystem.
+ *
+ * ssh2 answers a refused subsystem with its own wording — "Unable to start
+ * subsystem: sftp" — and that wording is text from the far end, which #230
+ * does not let reach a client. The refusal is recognised here and replaced
+ * with fixed text that names the cause, the way every other SFTP failure is.
+ */
+export function isSftpSubsystemUnavailable(error) {
+  const message = typeof error?.message === "string" ? error.message : "";
+  return /subsystem/i.test(message);
+}
+
+/**
+ * The failure the client is told about when the server has no SFTP
+ * subsystem.
+ *
+ * 501, the same status as an operation the server does not implement: the
+ * request was fine and the server cannot do it.
+ */
+export function sftpSubsystemUnavailableFailure(error) {
+  return new SftpOperationError(
+    "That server does not offer the SFTP subsystem, so its files cannot be browsed.",
+    { statusCode: 501, cause: error }
+  );
+}
+
+/**
  * Turn an SFTP failure into the error the client is told about.
  *
  * An error that is not an SFTP status failure (a timeout, a transport

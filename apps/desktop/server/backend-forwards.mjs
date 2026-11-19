@@ -20,6 +20,33 @@ export class InvalidForwardRequestError extends Error {
   }
 }
 
+/**
+ * A forward that could not start because the local port is taken.
+ *
+ * Its message is fixed text: the user asked for a forward on a port that
+ * something else is already listening on, and "Internal server error." does
+ * not say that. The port itself is in the request the user made, so the
+ * client can name it.
+ */
+export class ForwardPortInUseError extends Error {
+  constructor(message, statusCode = 409) {
+    super(message);
+    this.name = "ForwardPortInUseError";
+    // 409: the request is fine and the world is not — the port is in use —
+    // and a retry of the same request would be refused the same way.
+    this.statusCode = statusCode;
+  }
+}
+
+/**
+ * Whether a failure is a local port that is already in use.
+ *
+ * The code is Node's own, so the wording never has to be read.
+ */
+export function isAddressInUseError(error) {
+  return error?.code === "EADDRINUSE";
+}
+
 export function validateForwardPorts({ direction, localPort, remotePort }) {
   for (const [label, port, bind] of [
     ["Local", localPort, direction === "local"],
@@ -139,9 +166,21 @@ export function createForwardOperations({ sessions, forwards }) {
     });
 
     await new Promise((resolve, reject) => {
-      server.once("error", reject);
+      const onError = (error) => {
+        // A port that is already in use is the one failure a user can act
+        // on: they chose another port. It is named, not rebuilt as
+        // "Internal server error.".
+        reject(
+          isAddressInUseError(error)
+            ? new ForwardPortInUseError(
+                "That local port is already in use, so the forward cannot be started. Pick another one."
+              )
+            : error
+        );
+      };
+      server.once("error", onError);
       server.listen(localPort, localHost, () => {
-        server.off("error", reject);
+        server.off("error", onError);
         resolve();
       });
     });
