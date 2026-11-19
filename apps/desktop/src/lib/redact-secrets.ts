@@ -283,6 +283,17 @@ const TOKEN_PREFIXES: string[] = [
 ];
 
 /**
+ * The start of the run of name characters at the end of the text.
+ */
+function trailingRunStart(text: string): number {
+  let index = text.length;
+  while (index > 0 && NAME_CHARACTER.test(text[index - 1])) {
+    index -= 1;
+  }
+  return index;
+}
+
+/**
  * The tail of the text that is an escape sequence that has not finished.
  */
 function incompleteEscapeTail(text: string): string {
@@ -556,17 +567,25 @@ export class OutputRedactor {
         (this.mode === "secret-value" || this.mode === "secret-quoted-value");
       const bare = /[\s,;}]/.exec(this.pending);
       const value = bare ? this.pending.slice(0, bare.index) : this.pending;
-      if (secret) {
-        this.release(maskedValue(value));
-      } else {
-        this.releaseTokens(value);
-      }
       // The text after the value is ordinary text, the way the whole-text
       // redaction reads it — but it is masked the same way, so that a second
       // credential in it is masked as well.
-      const rest = bare ? this.pending.slice(bare.index) : "";
-      this.release(this.redactEnabled ? redactSecrets(rest) : rest);
-      this.pending = "";
+      const after = bare ? this.pending.slice(bare.index) : "";
+      if (secret) {
+        // A secret value is masked as one thing.
+        this.release(maskedValue(value));
+        this.release(this.redactEnabled ? redactSecrets(after) : after);
+        this.pending = "";
+      } else {
+        // An ordinary value is released as it is — but the run of name
+        // characters at its end is held back: it may be the start of a token
+        // whose rest arrives after this, and without the beginning of it the
+        // rest could not be recognised.
+        const runStart = trailingRunStart(value);
+        this.releaseTokens(value.slice(0, runStart));
+        this.release(this.redactEnabled ? redactSecrets(after) : after);
+        this.pending = value.slice(runStart);
+      }
       // The value stays OPEN: output that arrives after this is still part
       // of it, and it is still masked.
     }

@@ -315,6 +315,18 @@ describe("redacting a stream of output", () => {
     expect(redactor.append("")).not.toContain("with spaces");
   });
 
+  it("keeps masking a token that continues after the output was finished", () => {
+    // The run of name characters at the end of an ordinary value is held
+    // back: it may be the start of a token whose rest arrives after the
+    // output was finished.
+    const redactor = new OutputRedactor();
+    redactor.append("key=ghp_abcdefghij");
+    redactor.flush();
+    redactor.append("klmnopqrstuvwxyz012345\n");
+
+    expect(redactor.append("")).toBe("key=[redacted]");
+  });
+
   it("leaves a run that is too short to be a token alone", () => {
     // The token shapes have their own lengths: "ghp_abcdefghij" is not a
     // GitHub token, and hiding it would hide text that is not a secret.

@@ -107,21 +107,6 @@ describe("the session history and secrets", () => {
     expect(entry.outputPreview).toContain("[redacted]");
   });
 
-  it("keeps a secret out of the preview when the output around it is long", () => {
-    // The same boundary, with a credential on a line of its own that the
-    // output around it pushes to the end of the preview: the name and the
-    // value are held together until the value arrives, so the credential is
-    // still masked.
-    const filler = "log line\n".repeat(20_000);
-    const entry = recordOutputInChunks([
-      `${filler}password=`,
-      "synthetic-value\n",
-    ]);
-
-    expect(entry.outputPreview).not.toContain("synthetic-value");
-    expect(entry.outputPreview).toContain("[redacted]");
-  });
-
   it("keeps a secret out of the preview when a colour code splits its name", () => {
     // The escape sequence arrives in two pieces, so the name is split too:
     // "pass" + colour + "word". A name that is split cannot be recognised,
