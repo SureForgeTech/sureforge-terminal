@@ -2,6 +2,11 @@ import type { BackendHostConnection } from "./api";
 import { hostSupportsJumpHosts, hostSupportsTrustedKeys, type HostRecord } from "../types/host";
 import { getHostConnectionSecrets } from "../store/connection-secrets-store";
 import { useHostsStore } from "../store/hosts-store";
+import {
+  applyGroupSettings,
+  groupSettingsFor,
+  useGroupSettingsStore,
+} from "../store/group-settings-store";
 import { useIdentitiesStore } from "../store/identities-store";
 import { resolveIdentityForHost } from "./host-identity-resolver";
 import type { KnownHostRecord } from "../types/known-host";
@@ -43,6 +48,15 @@ function buildBackendConnectionRecursive(
   const knownHost = findKnownHostMatch(knownHosts, host);
   const secrets = getHostConnectionSecrets(host.id);
 
+  // A group's settings are defaults: the host keeps what it sets itself, and
+  // takes the group's for what it does not. Nothing is overwritten, so a host
+  // that needs its own bastion still has one.
+  const groupSettings = groupSettingsFor(
+    useGroupSettingsStore.getState().groupSettings,
+    (host as { group?: string }).group
+  );
+  const effectiveHost = applyGroupSettings(host, groupSettings);
+
   if (hostSupportsTrustedKeys(host.protocol) && host.hostKeyPolicy === "requireTrusted" && !knownHost) {
     throw new Error(
       `Trusted host key required for ${host.label}. Scan and trust ${host.hostname}:${host.port} in Keys before connecting.`
@@ -54,7 +68,7 @@ function buildBackendConnectionRecursive(
   // there is no identity (transitional). The host-record fields stay
   // populated by the editor so a partially-migrated workspace keeps working.
   const identity = resolveIdentityForHost(host, useIdentitiesStore.getState().identities);
-  const effectiveUsername = identity?.username?.trim() || host.username;
+  const effectiveUsername = identity?.username?.trim() || effectiveHost.username;
   const effectiveAuthMethod = identity?.authMethod ?? host.authMethod;
   const effectivePrivateKeyPath = identity
     ? identity.authMethod === "privateKey"
@@ -63,10 +77,10 @@ function buildBackendConnectionRecursive(
     : host.privateKeyPath;
 
   let jumpHost: BackendHostConnection | undefined;
-  if (hostSupportsJumpHosts(host.protocol) && host.jumpHostId) {
+  if (hostSupportsJumpHosts(host.protocol) && effectiveHost.jumpHostId) {
     const resolvedJumpHost = useHostsStore
       .getState()
-      .hosts.find((candidate) => candidate.id === host.jumpHostId);
+      .hosts.find((candidate) => candidate.id === effectiveHost.jumpHostId);
     if (!resolvedJumpHost) {
       throw new Error(`Jump host is missing for ${host.label}.`);
     }
@@ -81,7 +95,7 @@ function buildBackendConnectionRecursive(
   return {
     agentForwarding: host.agentForwarding,
     authMethod: effectiveAuthMethod,
-    environment: host.environment,
+    environment: effectiveHost.environment,
     hostKeyPolicy: host.hostKeyPolicy,
     hostname: host.hostname,
     jumpHost,
@@ -92,7 +106,7 @@ function buildBackendConnectionRecursive(
     port: host.port,
     privateKeyPath: effectivePrivateKeyPath,
     protocol: host.protocol,
-    sftpRoot: host.protocol === "ssh" ? host.sftpRoot : undefined,
+    sftpRoot: host.protocol === "ssh" ? effectiveHost.sftpRoot : undefined,
     username: effectiveUsername,
   };
 }

@@ -1,0 +1,1 @@
+- [FEATURE] A group can carry the settings its hosts share — the user name, the bastion, the SFTP root and the environment — and a host keeps its own value wherever it has one.

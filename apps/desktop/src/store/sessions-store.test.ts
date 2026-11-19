@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sampleHosts } from "../types/host";
 import { formatSessionConnectionState, type SessionPane, type SessionWorkspaceState } from "../types/session";
 
-vi.mock("../lib/backend-runtime", () => ({
+// The backend runtime is only partly mocked: the app store asks it whether
+// the Tauri runtime is present.
+vi.mock("../lib/backend-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/backend-runtime")>()),
   closeSession: vi.fn(() => Promise.resolve({ ok: true })),
 }));
 import { closeSession } from "../lib/backend-runtime";
