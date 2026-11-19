@@ -6,16 +6,16 @@ Make `SureForgeTech/sureforge-terminal` (a local-first macOS SSH client, Apache-
 
 ## What is done, and whether it is tested
 
-**Everything in the repository is committed on `main` and tested.** The last commit `1d9a61c` was independently reviewed and **APPROVED with 0 P0 and 0 P1 findings** on that exact head.
+**Everything in the repository is committed and tested.** The head `fd39133` was independently reviewed and **APPROVED with 0 P0 and 0 P1 findings** on that exact head. The product code it carries is the reviewed head `1d9a61c` plus two small backend fixes that were also reviewed on their own.
 
 Two slices, 22 commits on top of `6750428` (`git diff 6750428..1d9a61c` = 76 files, +6885 / −288):
 
 1. **Browser-backend reliability** (`6750428` → `4d24bdb`, 14 commits) — input is held until the session's shell is open instead of being dropped, the terminal is sized at open, a shell-open deadline replaces a hang, every failure carries a typed code and message, an approved host key that changed is refused with the reason, a late shell cannot resurrect a failed session, the jump client is torn down and scrubbed. Independently approved (no P0/P1).
-2. **Five features + the review fixes** (`4d24bdb` → `1d9a61c`, 22 commits) — history output redaction, terminal font picker, group-inherited host settings, broadcast input to every open session, actionable connect failures.
+2. **Five features + the review fixes** (`4d24bdb` → `fd39133`, 25 commits) — history output redaction, terminal font picker, group-inherited host settings, broadcast input to every open session, actionable connect failures. Two of the deferred backend follow-ups came with it: a server that does not offer the SFTP subsystem, and a local forward on a port that is already in use, are both named now instead of arriving as "Internal server error.".
 
-**Validation on `1d9a61c`:** `npm run validate` → 206 test files, 1204 passed, 1 skipped; `tsc -b` clean; ESLint clean. The command exits 1 **only** on the Docker-gated Semgrep step (no Docker in this sandbox; the same step fails identically on the base commit).
+**Validation on `fd39133`:** `npm run validate` → 207 test files, 1213 passed, 1 skipped; `tsc -b` clean; ESLint clean. The command exits 1 **only** on the Docker-gated Semgrep step (no Docker in this sandbox; the same step fails identically on the base commit).
 
-**Review:** a fresh-context reviewer (given the base/head pair, the complete git-generated diff, the acceptance criteria and the real validation output) ran sixteen rounds on the feature slice. Every finding was a real defect; nearly all were in the output redaction, which was rewritten three times and is now a lexer over the output pieces. The property the redaction exists for is a repository test: the same output, split at every possible place, gives the same preview as the output in one piece (`apps/desktop/src/lib/redact-secrets.streaming.test.ts`, 49 fixtures at every split and every pair of splits).
+**Review:** a fresh-context reviewer (given the base/head pair, the complete git-generated diff, the acceptance criteria and the real validation output) ran eighteen rounds in total: sixteen on the feature slice and two on the two backend follow-ups. Every finding was a real defect; nearly all were in the output redaction, which was rewritten three times and is now a lexer over the output pieces. The property the redaction exists for is a repository test: the same output, split at every possible place, gives the same preview as the output in one piece (`apps/desktop/src/lib/redact-secrets.streaming.test.ts`, 49 fixtures at every split and every pair of splits).
 
 **Nothing is half-done in the repository.** The tree is clean; there are no stashes and no uncommitted edits.
 
@@ -32,10 +32,17 @@ Only the **delivery**, which needs the repository owner's credentials:
 From `/workspace/sureforge-terminal`, on the owner's side (with credentials that can write to the repo):
 
 ```
+# the whole branch, with the handoff folder:
+git push -u origin wip/sureforge-terminal-features
+gh pr create --base main --head wip/sureforge-terminal-features \
+  --title "feat: five features, and the browser-backend failures they build on" \
+  --body-file docs/handoff/pr-body-combined.md
+
+# or the product change on its own, without the handoff folder:
 git push origin 1d9a61c:refs/heads/feat/reliability-and-five-features
 gh pr create --base main --head feat/reliability-and-five-features \
   --title "feat: five features, and the browser-backend failures they build on" \
-  --body-file /tmp/opencode/pr-body-combined.md
+  --body-file docs/handoff/pr-body-combined.md
 ```
 
 Then wait for `validate`, `rust-validate` and `CodeQL` to go green on that head, resolve any review threads, and **squash-merge**.
@@ -47,8 +54,9 @@ Two constraints the owner must respect:
 
 ## Branch, commit, pull request
 
-- Branch: `main` (local), head `1d9a61cf5955e5b428eb0029db7dbd024d0b3301` — *"fix(features): the fifteenth round of review finding, and the plain value that grew"*.
-- Preservation branch created for this handoff: `wip/sureforge-terminal-features` (same tree as `main`; the working tree was clean, so the branch carries the work as it stands).
+- Branch: `wip/sureforge-terminal-features`, head `fd39133` — *"fix(backend): the two failures that were still not reaching the client"*. It carries the reviewed head `1d9a61c`, the two backend follow-ups, and the `docs/handoff/` folder.
+- The reviewed product head, if the owner prefers to push only the product change: `1d9a61cf5955e5b428eb0029db7dbd024d0b3301` — *"fix(features): the fifteenth round of review finding, and the plain value that grew"*.
+- `main` in this checkout still points at `1d9a61c` and was not modified.
 - Open pull request: **none**. No PR was opened and none can be opened from this sandbox (see the blocker).
 
 ## Decisions made, and why
@@ -135,4 +143,4 @@ Outside the repository (a sandbox rebuild outside `/workspace` would lose these)
 ## Known, accepted, non-blocking
 
 - The preview of an output that ends in an unterminated quoted value is conservative until the output is finished (the persisted value of a finished command is exact).
-- SFTP-subsystem-absent and `EADDRINUSE` still say "Internal server error."; the DSA refusal wording reads "Host key has changed."; `known_hosts` ignores the key algorithm; a symlinked directory is listed as an unopenable file. All predate this work and are untouched.
+- `known_hosts` ignores the key algorithm; a symlinked directory is listed as an unopenable file; the DSA refusal wording reads "Host key has changed." All predate this work and are untouched.

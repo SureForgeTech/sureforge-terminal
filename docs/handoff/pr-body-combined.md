@@ -64,8 +64,8 @@ Five features:
 
 ```
 $ npm run validate
-  Test Files  206 passed (206)
-       Tests  1204 passed | 1 skipped (1205)
+  Test Files  207 passed (207)
+       Tests  1213 passed | 1 skipped (1214)
   ✓ built in 382ms
   [validate] rust build + tests skipped (macOS only — the native crate ships on macOS)
   [validate] native trust tooling skipped (macOS only)
@@ -85,7 +85,7 @@ Not run, and why: no Rust, no dependency and no CI-configuration file is touched
 
 Both slices were reviewed independently, each against its own exact head, by a fresh-context reviewer that was given the commit range, the complete diff, the acceptance criteria and the real validation output. Neither review left an unresolved P0 or P1 finding.
 
-The review of the five features ran sixteen rounds on the exact head. Every finding it raised was a real defect — most of them in the redaction of the output the session history keeps, which was rewritten three times and is now a lexer over the output pieces. The property that redaction exists for is a test in the repository: the same output, split at every possible place, gives the same preview as the output in one piece.
+The review of the five features ran eighteen rounds on the exact head. Every finding it raised was a real defect — most of them in the redaction of the output the session history keeps, which was rewritten three times and is now a lexer over the output pieces. The property that redaction exists for is a test in the repository: the same output, split at every possible place, gives the same preview as the output in one piece.
 
 ## Changelog entry
 
@@ -103,7 +103,7 @@ The review of the five features ran sixteen rounds on the exact head. Every find
 - The `main` rulesets allow **squash only** for this repository ("Public repositories: changes to main through pull requests"), and they dismiss stale reviews on push — so please do not push to the branch after the review lands, or the approval is dropped and the review has to run again.
 - Review threads must be resolved before the merge is allowed.
 - Every commit in this branch carries a `Signed-off-by:` line, and the DCO check exempts maintainer and bot pull requests anyway.
-- The branch is a linear chain of 40 commits on top of `6750428` (99 files, +16477 / -288), which includes `docs/handoff/` — the run record, the review packets and the handoff notes for the change. `main` has moved to `88c5e52` since (`fix(dco): accept sign-offs in commits with Windows line endings (#618)`, `.github/workflows/dco.yml` only); the merge is clean and the two changes touch different files.
+- The branch is a linear chain of 43 commits on top of `6750428` (102 files, +16740 / -292), which includes `docs/handoff/` — the run record, the review packets and the handoff notes for the change. `main` has moved to `88c5e52` since (`fix(dco): accept sign-offs in commits with Windows line endings (#618)`, `.github/workflows/dco.yml` only); the merge is clean and the two changes touch different files.
 - The `changelog.d/` fragments carry no `(#N)` suffix: the number is the pull request's, and it is only known once the pull request exists — and adding it afterwards would change the head after the review. `scripts/roll-changelog.mjs` accepts the fragments as they are. If you want the number in the release notes, add it before the review lands.
 - The branch that carries all of this is `wip/sureforge-terminal-features` (40 commits on top of `6750428`). Push it with `git push -u origin wip/sureforge-terminal-features`, then open the pull request against `main` with the title above and this body.
 - This pull request carries two slices — the browser-backend reliability fixes and the five features — as one pull request. They touch no file in common, and each was reviewed independently at its own exact head.
