@@ -352,6 +352,16 @@ describe("redacting a stream of output", () => {
     expect(redactor.flush()).toBe(wholeTextPreview('key="hello world'));
   });
 
+  it("never shows a credential that is inside a quoted ordinary value", () => {
+    // A quoted value is held until its closing quote, and a credential can
+    // be inside it.
+    const redactor = new OutputRedactor();
+    redactor.append('key="hello token=second-secret');
+
+    expect(redactor.append("")).not.toContain("second-secret");
+    expect(redactor.append("")).toBe(wholeTextPreview('key="hello token=second-secret'));
+  });
+
   it("leaves a run that is too short to be a token alone", () => {
     // The token shapes have their own lengths: "ghp_abcdefghij" is not a
     // GitHub token, and hiding it would hide text that is not a secret.

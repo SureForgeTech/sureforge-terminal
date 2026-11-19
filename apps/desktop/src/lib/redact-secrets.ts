@@ -1095,12 +1095,18 @@ export class OutputRedactor {
             // the preview.
             isWholeTokenRun(this.pending)
             ? REDACTION_PLACEHOLDER
-            : // The held text is masked with the token shapes. A token
-              // inside it needs the text in front of it, so all of the held
-              // text is masked — but with the token shapes alone, because
-              // the whole redaction over the whole of it would cost more
-              // with every piece of output.
-              this.redactEnabled ? maskTokens(this.pending) : this.pending
+            : this.mode === "plain-quoted-value"
+              ? // A quoted value is held until its closing quote, and a
+                // credential can be inside it — so the whole redaction is
+                // used for it. A quoted value ends at the end of its line,
+                // so what is held is a line, not the whole output.
+                this.redactEnabled ? redactSecrets(this.pending) : this.pending
+              : // The held text is masked with the token shapes. A token
+                // inside it needs the text in front of it, so all of the held
+                // text is masked — but with the token shapes alone, because
+                // the whole redaction over the whole of it would cost more
+                // with every piece of output.
+                this.redactEnabled ? maskTokens(this.pending) : this.pending
           : this.pending;
     return `${this.emitted}${held}`.slice(-REDACTED_PREVIEW_LIMIT).trim();
   }
