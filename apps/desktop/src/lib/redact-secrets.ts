@@ -580,11 +580,11 @@ export class OutputRedactor {
         // An ordinary value is released as it is — but the run of name
         // characters at its end is held back: it may be the start of a token
         // whose rest arrives after this, and without the beginning of it the
-        // rest could not be recognised.
+        // rest could not be recognised. The text after the value is held
+        // with it, so that the order of the output is not changed.
         const runStart = trailingRunStart(value);
         this.releaseTokens(value.slice(0, runStart));
-        this.release(this.redactEnabled ? redactSecrets(after) : after);
-        this.pending = value.slice(runStart);
+        this.pending = value.slice(runStart) + after;
       }
       // The value stays OPEN: output that arrives after this is still part
       // of it, and it is still masked.
@@ -1094,10 +1094,14 @@ export class OutputRedactor {
             // the preview.
             isWholeTokenRun(this.pending)
             ? REDACTION_PLACEHOLDER
-            : // The whole of the held text is masked, not only its tail: a
-              // token inside it needs the text in front of it to be
-              // recognised.
-            maskTokens(this.pending)
+            : this.mode === "plain-value" || this.mode === "plain-quoted-value"
+              ? // An ordinary value can hold a credential, so the whole of
+                // it is masked, not only its tail.
+                this.redactEnabled ? redactSecrets(this.pending) : this.pending
+              : // A run of name characters cannot hold a credential, and a
+                // token inside it needs the text in front of it — so the
+                // token shapes are enough, and the cost stays small.
+                this.redactEnabled ? maskTokens(this.pending) : this.pending
           : this.pending;
     return `${this.emitted}${held}`.slice(-REDACTED_PREVIEW_LIMIT).trim();
   }

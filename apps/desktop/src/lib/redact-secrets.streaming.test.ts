@@ -327,6 +327,17 @@ describe("redacting a stream of output", () => {
     expect(redactor.append("")).toBe("key=[redacted]");
   });
 
+  it("keeps the order of the text when the output is finished", () => {
+    // Finishing the output holds back the run of name characters at the end
+    // of a value, so that a token that continues after it is recognised.
+    // The text after the value is held with it, so that the order of the
+    // output does not change.
+    const redactor = new OutputRedactor();
+    redactor.append('key="hello world');
+
+    expect(redactor.flush()).toBe(wholeTextPreview('key="hello world'));
+  });
+
   it("leaves a run that is too short to be a token alone", () => {
     // The token shapes have their own lengths: "ghp_abcdefghij" is not a
     // GitHub token, and hiding it would hide text that is not a secret.
