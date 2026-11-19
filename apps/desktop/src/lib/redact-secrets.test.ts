@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   REDACTION_PLACEHOLDER,
+  REDACTED_PREVIEW_LIMIT,
+  OutputRedactor,
   containsSecret,
   isSecretName,
   redactSecrets,
@@ -106,6 +108,30 @@ describe("redacting secrets", () => {
     expect(containsSecret("password=hunter2")).toBe(true);
     expect(containsSecret("nothing here")).toBe(false);
     expect(containsSecret("")).toBe(false);
+  });
+
+  it("keeps only what could still change", () => {
+    // What the redactor holds back is an assignment waiting for its value,
+    // a run of name characters, or the body of a key block — never the
+    // output it has already released.
+    const redactor = new OutputRedactor();
+    for (let index = 0; index < 500; index += 1) {
+      redactor.append("some ordinary output line\n");
+    }
+
+    expect(redactor.heldLength).toBeLessThanOrEqual(64);
+    expect(redactor.append("").length).toBeLessThanOrEqual(REDACTED_PREVIEW_LIMIT);
+  });
+
+  it("holds back the body of an open key block without keeping it", () => {
+    const redactor = new OutputRedactor();
+    redactor.append("-----BEGIN RSA PRIVATE KEY-----\n");
+    for (let index = 0; index < 1_000; index += 1) {
+      redactor.append("A".repeat(70));
+    }
+
+    expect(redactor.heldLength).toBeLessThanOrEqual(64);
+    expect(redactor.append("")).toBe("[redacted]");
   });
 
   it("splits a name into the words a credential is named after", () => {

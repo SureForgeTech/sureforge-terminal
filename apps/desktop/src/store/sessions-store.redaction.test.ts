@@ -121,6 +121,40 @@ describe("the session history and secrets", () => {
     expect(entry.outputPreview).toContain("[redacted]");
   });
 
+  it("keeps a secret out of the preview when a colour code splits its name", () => {
+    // The escape sequence arrives in two pieces, so the name is split too:
+    // "pass" + colour + "word". A name that is split cannot be recognised,
+    // so the unfinished sequence is carried into the next piece.
+    const entry = recordOutputInChunks(["pass\u001b[", "32mword=synthetic-value"]);
+
+    expect(entry.outputPreview).not.toContain("synthetic-value");
+    expect(entry.outputPreview).toContain("[redacted]");
+  });
+
+  it("keeps a secret out of the preview when the value is on the next line", () => {
+    // The value follows the name across a blank line. The name is what
+    // makes the value a secret, so the two are held together until the
+    // value arrives.
+    const entry = recordOutputInChunks(["password=\n\n", "synthetic-value\n"]);
+
+    expect(entry.outputPreview).not.toContain("synthetic-value");
+    expect(entry.outputPreview).toContain("[redacted]");
+  });
+
+  it("keeps up with a long stream of small writes", () => {
+    // The cost of a piece of output must not grow with the output seen so
+    // far: a command that writes a little, very often, must not freeze the
+    // app.
+    const started = Date.now();
+    const entry = recordOutputInChunks(
+      Array.from({ length: 4_000 }, (_unused, index) => `line ${index} of output\n`)
+    );
+    const elapsed = Date.now() - started;
+
+    expect(entry.outputPreview).toContain("line 3999 of output");
+    expect(elapsed).toBeLessThan(5_000);
+  });
+
   it("keeps ordinary output readable", () => {
     const entry = recordOutput("total 24\nrelease.tar.gz  1024");
 
