@@ -29,7 +29,11 @@ Only the **delivery**, which needs the repository owner's credentials:
 
 ## The exact next step
 
-From `/workspace/sureforge-terminal`, on the owner's side (with credentials that can write to the repo):
+**The branch is pushed and the pull request is open: https://github.com/SureForgeTech/sureforge-terminal/pull/623** (base `main`, head `wip/sureforge-terminal-features`, state OPEN, MERGEABLE, 102 files, +16748 / -292). The checks `validate`, `rust-validate`, `CodeQL` and the sign-off check are running on it.
+
+The remaining step is the owner's: wait for those checks to go green, resolve any review threads, and **squash-merge**. Squash only — the `main` rulesets allow no other merge method.
+
+If the pull request is opened again from scratch, the commands are:
 
 ```
 # the whole branch, with the handoff folder:
@@ -54,10 +58,10 @@ Two constraints the owner must respect:
 
 ## Branch, commit, pull request
 
-- Branch: `wip/sureforge-terminal-features`, head `fd39133` — *"fix(backend): the two failures that were still not reaching the client"*. It carries the reviewed head `1d9a61c`, the two backend follow-ups, and the `docs/handoff/` folder.
+- Branch: `wip/sureforge-terminal-features`, head `4f954d3` — *"Merge remote-tracking branch 'origin/main' into wip/sureforge-terminal-features"*. It carries the reviewed head `1d9a61c`, the two backend follow-ups, the `docs/handoff/` folder, and a merge of the base branch. That merge is what made the push possible: the branch carried an older copy of `.github/workflows/dco.yml` than `main`, and the App has no `workflows` permission, so GitHub refused a push that would have updated a workflow file. The merge takes `main`'s own copy, so the branch modifies no workflow; the product code is byte-identical to the reviewed head, and the delivery rules keep a review across a clean merge of the base branch.
 - The reviewed product head, if the owner prefers to push only the product change: `1d9a61cf5955e5b428eb0029db7dbd024d0b3301` — *"fix(features): the fifteenth round of review finding, and the plain value that grew"*.
 - `main` in this checkout still points at `1d9a61c` and was not modified.
-- Open pull request: **none**. No PR was opened and none can be opened from this sandbox (see the blocker).
+- Open pull request: **#623** — https://github.com/SureForgeTech/sureforge-terminal/pull/623 (base `main`, head `wip/sureforge-terminal-features`, OPEN, MERGEABLE). It is not merged.
 
 ## Decisions made, and why
 
@@ -69,7 +73,7 @@ Two constraints the owner must respect:
 
 ## Blocker (exact error text)
 
-The sandbox's GitHub App installation token has no write access to this repository.
+The sandbox's GitHub App installation token had no write access to this repository. The installation was refreshed during the session and now covers it, so the branch was pushed and the pull request was opened. The blockers below are the record of what happened before that.
 
 ```
 $ git push --dry-run origin HEAD:refs/heads/feat/reliability-and-five-features
@@ -85,7 +89,7 @@ Supporting evidence, read live from the API:
 
 No other credential was sought and no settings were changed.
 
-**Re-checked with a freshly refreshed token (2026-11-19, after the host rotated `/var/lib/opencode-github/github.token` at 08:08 UTC).** The token is valid — `gh auth status` reports `Logged in to github.com account abd-oss-lane[bot]` and API reads succeed — but the App installation still does not cover this repository:
+**Earlier in the session the push failed with 403, because the installation did not cover this repository. It was re-checked with a freshly refreshed token (2026-11-19, after the host rotated `/var/lib/opencode-github/github.token` at 08:08 UTC).** The token is valid — `gh auth status` reports `Logged in to github.com account abd-oss-lane[bot]` and API reads succeed — but the App installation still does not cover this repository:
 
 ```
 $ gh api repos/SureForgeTech/sureforge-terminal --jq '.permissions'
