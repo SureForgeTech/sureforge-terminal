@@ -1,1 +1,1 @@
-- [FEATURE] A connection failure that can only be fixed on the host now offers an "Open host" action beside the message, taking the user straight to the host's editor.
+- [FEATURE] A connection failure that can only be fixed on the host now offers an "Open host" action beside the message, taking the user straight to the host's editor. (#623)

@@ -1,1 +1,1 @@
-- [FEATURE] Input can be broadcast to every open session at once, so the same command can be run on several hosts from one terminal.
+- [FEATURE] Input can be broadcast to every open session at once, so the same command can be run on several hosts from one terminal. (#623)
