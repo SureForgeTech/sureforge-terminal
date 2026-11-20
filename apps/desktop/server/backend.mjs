@@ -62,7 +62,13 @@ import {
   SshConfigResolutionRegistry,
 } from "./ssh-config-resolution.mjs";
 
-import { createSshSessionManager } from "./backend-ssh-session.mjs";
+import {
+  applySessionResize,
+  createSshSessionManager,
+  writeSessionInput,
+} from "./backend-ssh-session.mjs";
+import { relayableFailureCode } from "./backend-failure-codes.mjs";
+import { sessionFailureFrame } from "./backend-session-frames.mjs";
 import { createSftpOperations } from "./backend-sftp-ops.mjs";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const appRoot = normalize(join(__dirname, ".."));
@@ -239,11 +245,21 @@ function failSession(session, error) {
   // in two steps — and a broadcast to nobody is a message the user never sees.
   // A failed host-key verification is exactly that case, and its reason is the
   // whole point of reporting it.
-  session.failureMessage = getErrorMessage(error);
-  broadcast(session, {
-    type: "error",
-    message: session.failureMessage,
-  });
+  //
+  // The FIRST reason is kept. A session can fail twice — the connection drops
+  // and the shell never opens — and the first failure is the cause; the second
+  // is a consequence, and reporting it would tell the user about the symptom
+  // instead.
+  if (!session.failureMessage) {
+    session.failureMessage = getErrorMessage(error);
+    // A typed failure also carries the code the renderer's classifier branches
+    // on. Without it a refused sign-in could be read as an unclassified
+    // failure and retried, and repeated failed logins can lock the account.
+    // Only a code this backend chooses is relayed: an arbitrary error code
+    // (a Node error code, say) is not a category the client understands.
+    session.failureCode = relayableFailureCode(error) ?? null;
+  }
+  broadcast(session, sessionFailureFrame(session));
 }
 
 /**
@@ -857,12 +873,11 @@ const server = createServer(async (request, response) => {
 
     try {
       const body = await readJson(request);
-      if (!session.stream) {
-        sendJson(response, 200, { ok: true, pending: true });
-        return;
-      }
-
-      session.stream.setWindow(body.rows, body.cols, body.rows * 16, body.cols * 8);
+      // The pane lays out as soon as it mounts, which is before the shell has
+      // opened, so the size can arrive with no stream to apply it to. Hold it
+      // and apply it when the shell opens; dropping it left the session at the
+      // default 120x36 until the window happened to change again.
+      applySessionResize(session, body.rows, body.cols);
       sendJson(response, 200, { ok: true });
     } catch (error) {
       respondError(response, error);
@@ -956,12 +971,7 @@ server.on("upgrade", (request, socket, head) => {
     // A failure that happened before this socket attached was never
     // broadcast to anyone, so it is replayed here.
     if (session.failureMessage) {
-      ws.send(
-        JSON.stringify({
-          type: "error",
-          message: session.failureMessage,
-        })
-      );
+      ws.send(JSON.stringify(sessionFailureFrame(session)));
     }
 
     if (session.buffer.length || session.droppedBytes) {
@@ -990,11 +1000,16 @@ server.on("upgrade", (request, socket, head) => {
       }
       try {
         const message = JSON.parse(raw.toString("utf8"));
-        if (message.type === "input" && session.stream) {
-          session.stream.write(message.data);
+        if (message.type === "input") {
+          // The session id reaches the client before the shell exists, so
+          // input can arrive before there is a stream to write it to. It is
+          // held until the shell opens rather than dropped.
+          writeSessionInput(session, message.data);
         }
-        if (message.type === "resize" && session.stream) {
-          session.stream.setWindow(message.rows, message.cols, message.rows * 16, message.cols * 8);
+        if (message.type === "resize") {
+          // A size that arrives before the shell exists is applied when it
+          // opens, not dropped.
+          applySessionResize(session, message.rows, message.cols);
         }
       } catch {
         // Ignore malformed websocket frames.

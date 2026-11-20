@@ -121,6 +121,19 @@ const KNOWN_CATEGORIES: readonly SshErrorCategory[] = [
 ];
 
 /**
+ * Whether a value is a category this classifier acts on.
+ *
+ * The browser backend sends the code beside the message for a failed
+ * connection, the way the native shell sends it for a failed command (see
+ * src-tauri/src/ipc_error.rs). A code is only honoured when it is one of the
+ * categories above: an unknown code falls back to the prose rules, so a
+ * backend that invents a code cannot steer the retry policy.
+ */
+export function isSshErrorCategory(value: unknown): value is SshErrorCategory {
+  return typeof value === "string" && (KNOWN_CATEGORIES as readonly string[]).includes(value);
+}
+
+/**
  * #203: commands migrated to the typed `IpcError` reject with `{ code, message }`
  * where `code` is one of the category names above. Read that first — it is a
  * stable contract — and only fall back to the prose rules for the commands

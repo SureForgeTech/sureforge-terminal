@@ -7,6 +7,18 @@ export const REQUEST_BODY_MAX_BYTES = 1 * 1024 * 1024; // 1 MiB
 export const SFTP_UPLOAD_MAX_BYTES = 64 * 1024 * 1024; // 64 MiB (~48 MB file)
 /** Max bytes of terminal output held for a session while its ws is detached. */
 export const SESSION_BUFFER_MAX_BYTES = 256 * 1024; // 256 KiB
+/**
+ * Max bytes of terminal input held for a session whose shell has not opened
+ * yet. The same size as the websocket frame cap, so the buffer holds about
+ * one maximum-sized frame.
+ */
+export const SESSION_INPUT_MAX_BYTES = 64 * 1024; // 64 KiB
+/**
+ * Max number of buffered input chunks. The byte cap alone does not bound the
+ * array: a client sending many one-byte frames would fill the cap with
+ * entries. This bounds the entries.
+ */
+export const SESSION_INPUT_MAX_CHUNKS = 1024;
 
 export class PayloadTooLargeError extends Error {
   constructor(limit) {
@@ -147,4 +159,83 @@ export function bufferDetachedOutput(session, data, maxBytes = SESSION_BUFFER_MA
     session.bufferBytes -= evictedBytes;
     session.droppedBytes += evictedBytes;
   }
+}
+
+/**
+ * Hold terminal input typed before the session's shell exists.
+ *
+ * The session id is returned to the client as soon as the connection is
+ * established, which is before the shell has opened, so the first keystrokes
+ * can arrive before there is a stream to write them to. Dropping them loses
+ * what the user typed; holding them until the shell opens does not.
+ *
+ * When the buffer is over its cap the NEWEST bytes are dropped, which keeps
+ * the beginning of what was typed. That is the opposite of the output buffer,
+ * which keeps the newest chunk — and deliberately so: output is a display,
+ * where the latest bytes matter, while input is a command stream, where the
+ * earliest bytes are the command. Keeping the start leaves the shell a prefix
+ * ("rm -rf ") that waits for more input; keeping the end would leave it a
+ * suffix ("rf /tmp/x") that is a DIFFERENT command, and the shell would run
+ * that one.
+ *
+ * The cap is unreachable in practice — it is 64 KiB of typing before a shell
+ * opens — so this is a bound on memory, not a behaviour anyone sees.
+ *
+ * Mutates `session`; expects `session.pendingInput` (array),
+ * `session.pendingInputBytes` and `session.pendingInputDroppedBytes` (numbers)
+ * to be initialized. The dropped bytes are counted so the caller can tell
+ * the user that part of what they typed did not survive — the output buffer
+ * does the same for the output it had to drop.
+ */
+export function bufferPendingInput(
+  session,
+  data,
+  maxBytes = SESSION_INPUT_MAX_BYTES,
+  maxChunks = SESSION_INPUT_MAX_CHUNKS
+) {
+  // An empty frame carries nothing. Counting it would grow the array without
+  // growing the accounted bytes, so the byte cap would not bound it.
+  if (!data) {
+    return;
+  }
+  // Once something has been dropped, the sequence is broken: what is left is
+  // a prefix of a command line, and appending the next chunk to it would
+  // produce a DIFFERENT command. So everything after the first drop is
+  // dropped too.
+  const bytes = Buffer.byteLength(data, "utf8");
+  if (session.pendingInputDroppedBytes > 0) {
+    session.pendingInputDroppedBytes += bytes;
+    return;
+  }
+  if (
+    session.pendingInputBytes + bytes <= maxBytes &&
+    session.pendingInput.length < maxChunks
+  ) {
+    session.pendingInput.push(data);
+    session.pendingInputBytes += bytes;
+    return;
+  }
+  // The chunk does not fit. Keep as much of its BEGINNING as there is room
+  // for, cut on a character boundary: a prefix waits for more input, while a
+  // suffix could be a different command.
+  if (session.pendingInput.length >= maxChunks) {
+    session.pendingInputDroppedBytes += bytes;
+    return;
+  }
+  const room = maxBytes - session.pendingInputBytes;
+  let kept = "";
+  let keptBytes = 0;
+  for (const character of data) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (keptBytes + size > room) {
+      break;
+    }
+    kept += character;
+    keptBytes += size;
+  }
+  if (kept) {
+    session.pendingInput.push(kept);
+    session.pendingInputBytes += keptBytes;
+  }
+  session.pendingInputDroppedBytes += bytes - keptBytes;
 }

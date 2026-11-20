@@ -5,6 +5,8 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 
+import { SSH_FAILURE_CODES } from "./backend-failure-codes.mjs";
+
 /**
  * Records how the current HTTP request passed the auth gate ("token" or
  * "origin"), so connection code deep inside a route can tell without every
@@ -27,6 +29,12 @@ export class SshAuthRefusedError extends Error {
     super(message);
     this.name = "SshAuthRefusedError";
     this.statusCode = statusCode;
+    // The category the client branches on. A refused sign-in METHOD is a
+    // configuration problem — the host asks for a method this backend was
+    // told not to use — and retrying it cannot succeed: the same request
+    // would be refused the same way. The renderer's retry policy treats an
+    // unclassified failure as retryable, so it has to be told.
+    this.code = SSH_FAILURE_CODES.authFailed;
   }
 }
 

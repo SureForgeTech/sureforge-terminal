@@ -1,0 +1,1 @@
+- [FEATURE] Settings can now pick the terminal's font family and size, and the change applies live to terminals that are already open.

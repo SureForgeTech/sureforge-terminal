@@ -736,7 +736,51 @@ describe("backend SSH host-key trust", () => {
       });
       expect(ed.verify(approvedEd)).toBe(true);
       expect(ed.verify(keyBlob("ssh-ed25519", "BBBB"))).toBe(false);
-      expect(ed.failure.error).toBeNull();
+      // A key other than the approved one is refused WITH its reason. The
+      // trust-on-first-use path reports the same attack with a reason the user
+      // can act on; the approved-key path used to refuse it with no reason at
+      // all, and the client rebuilt that as "Internal server error.".
+      expect(ed.failure.error?.message).toContain("Host key verification failed");
+      expect(ed.failure.error?.message).toContain("example.internal:22");
+    });
+
+    it("reports an approved key that changed with a reason the renderer recognises", async () => {
+      // The renderer decides whether to retry a failed connect from the
+      // message (apps/desktop/src/lib/ssh-error-classifier.ts). A changed host
+      // key must never be retried automatically: it is the machine-in-the-
+      // middle signal, and the user has to re-approve the replacement key.
+      const { createTrustedHostKeyVerifier } = await load();
+      const approved = keyBlob("ssh-ed25519");
+      const verifier = createTrustedHostKeyVerifier({
+        hostname: "example.internal",
+        port: 22,
+        trustedKey: approved.toString("base64"),
+      });
+
+      expect(verifier.verify(keyBlob("ssh-ed25519", "BBBB"))).toBe(false);
+
+      const message = verifier.failure.error?.message ?? "";
+      expect(message).toContain("Host key verification failed");
+      expect(message).toContain("approved");
+      // No credentials were sent, and the message says what to do about it.
+      expect(message).toContain("Credentials were not sent");
+      expect(message).toContain("re-scan");
+
+      // The message the client receives must still categorise as a changed
+      // host key, because that is what keeps the renderer's retry policy from
+      // knocking on the door again after a machine-in-the-middle signal.
+      const { classifySshError } = await import("../../apps/desktop/src/lib/ssh-error-classifier");
+      const { shouldScheduleReconnect } = await import(
+        "../../apps/desktop/src/components/terminal/connect-failure-policy"
+      );
+      const classified = classifySshError(message);
+      expect(classified.category).toBe("host_key_mismatch");
+      expect(
+        shouldScheduleReconnect(classified.category, {
+          connectedOnce: true,
+          reconnectOnRestore: true,
+        }),
+      ).toBe(false);
     });
 
     it("does not put the store's path in the message it refuses with", async () => {
@@ -766,6 +810,10 @@ describe("backend SSH host-key trust", () => {
       expect(message).not.toContain("known_hosts");
       // The detail is still on the server.
       expect(String(verifier.failure.error?.cause)).toContain("malformed");
+      // The category is "internal", not "host_key_mismatch": the key did not
+      // change, the store could not be read. A store that another process
+      // holds for a moment should be tried again; a changed key must not be.
+      expect(verifier.failure.error?.code).toBe("internal");
     });
 
     it("keeps terminal control characters out of the message", async () => {

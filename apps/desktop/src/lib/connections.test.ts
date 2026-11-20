@@ -2,14 +2,17 @@ import { afterEach, describe, expect, it } from "vitest";
 import { buildBackendConnection, buildBackendConnectionFromKnownHost } from "./connections";
 import { useConnectionSecretsStore } from "../store/connection-secrets-store";
 import { useHostsStore } from "../store/hosts-store";
+import { useGroupSettingsStore } from "../store/group-settings-store";
 import { useIdentitiesStore } from "../store/identities-store";
 import type { IdentityRecord } from "../types/identity";
 import type { KnownHostRecord } from "../types/known-host";
 
 const initialIdentitiesState = useIdentitiesStore.getState();
+const initialGroupSettingsState = useGroupSettingsStore.getState();
 
 afterEach(() => {
   useIdentitiesStore.setState(initialIdentitiesState);
+  useGroupSettingsStore.setState(initialGroupSettingsState);
 });
 
 const trustedKnownHost: KnownHostRecord = {
@@ -30,6 +33,7 @@ const baseHost = {
     APP_ENV: "local",
     TERMSNIP_TEST: "enabled",
   },
+  group: "Local / Validation",
   hostKeyPolicy: "allowUnknown" as const,
   hostname: "127.0.0.1",
   id: "local-test",
@@ -81,6 +85,55 @@ describe("connection helpers", () => {
 
     expect(connection.knownHostPublicKey).toBe(trustedKnownHost.publicKey);
     expect(connection.knownHostAlgorithm).toBe(trustedKnownHost.algorithm);
+  });
+
+  it("applies the group's settings to a host that does not set them", () => {
+    // The group's settings are defaults for the hosts in it, and they are
+    // applied where the connection is built — so a host that leaves the user
+    // name, the SFTP root and the environment empty takes the group's.
+    useGroupSettingsStore.getState().setGroupSettings("Local / Validation", {
+      username: "ops",
+      sftpRoot: "/srv/app",
+      environment: { REGION: "eu-west-1" },
+    });
+
+    const connection = buildBackendConnection(
+      {
+        ...baseHost,
+        username: "",
+        sftpRoot: "",
+        environment: {},
+      },
+      []
+    );
+
+    expect(connection.username).toBe("ops");
+    expect(connection.sftpRoot).toBe("/srv/app");
+    expect(connection.environment).toEqual({ REGION: "eu-west-1" });
+  });
+
+  it("keeps the host's own settings over the group's", () => {
+    useGroupSettingsStore.getState().setGroupSettings("Local / Validation", {
+      username: "ops",
+      sftpRoot: "/srv/app",
+      environment: { REGION: "eu-west-1", TIER: "web" },
+    });
+
+    const connection = buildBackendConnection(
+      {
+        ...baseHost,
+        username: "root",
+        sftpRoot: "/home/root",
+        environment: { REGION: "us-east-1" },
+      },
+      []
+    );
+
+    expect(connection.username).toBe("root");
+    expect(connection.sftpRoot).toBe("/home/root");
+    // The environment is merged per key: the host's own value wins, and the
+    // group's other keys still come through.
+    expect(connection.environment).toEqual({ REGION: "us-east-1", TIER: "web" });
   });
 
   it("builds a one-hop jump host chain", () => {

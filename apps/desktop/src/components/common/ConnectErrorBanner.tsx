@@ -1,3 +1,5 @@
+import { useNavigate } from "react-router-dom";
+
 import { useConnectErrorStore } from "../../store/connect-error-store";
 
 // Surfaces the last connect failure.
@@ -6,11 +8,17 @@ import { useConnectErrorStore } from "../../store/connect-error-store";
 // message is visible no matter which surface started the connect: the hosts
 // page, the quick-connect box, the sidebar's pinned and recent lists, the
 // command palette, or the first-run welcome panel.
+//
+// A failure the user has to act on also carries an ACTION — "Open host" —
+// because a message that names the problem but not the fix leaves the user
+// hunting for the right screen.
 
 export function ConnectErrorBanner() {
   const message = useConnectErrorStore((state) => state.message);
   const tone = useConnectErrorStore((state) => state.tone);
+  const action = useConnectErrorStore((state) => state.action);
   const clearConnectError = useConnectErrorStore((state) => state.clearConnectError);
+  const navigate = useNavigate();
 
   if (!message) {
     return null;
@@ -29,13 +37,27 @@ export function ConnectErrorBanner() {
       }
     >
       <p className="text-callout font-medium text-[color:var(--shell-text)]">{message}</p>
-      <button
-        type="button"
-        onClick={clearConnectError}
-        className="rounded-control border border-[color:var(--shell-border)] px-3 py-1 text-callout text-[color:var(--shell-text)] transition hover:border-[color:var(--shell-muted)]"
-      >
-        Dismiss
-      </button>
+      <div className="flex items-center gap-2">
+        {action ? (
+          <button
+            type="button"
+            onClick={() => {
+              clearConnectError();
+              navigate(action.href);
+            }}
+            className="rounded-control border border-[color:var(--shell-border)] px-3 py-1 text-callout text-[color:var(--shell-text)] transition hover:border-[color:var(--shell-muted)]"
+          >
+            {action.label}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          onClick={clearConnectError}
+          className="rounded-control border border-[color:var(--shell-border)] px-3 py-1 text-callout text-[color:var(--shell-text)] transition hover:border-[color:var(--shell-muted)]"
+        >
+          Dismiss
+        </button>
+      </div>
     </div>
   );
 }

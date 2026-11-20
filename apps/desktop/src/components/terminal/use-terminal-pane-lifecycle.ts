@@ -13,6 +13,7 @@ import {
   attachTerminalPaneConnectionControls,
   initializeTerminalPaneTransport,
 } from "./terminal-pane-connection-controls";
+import { registerBroadcastSender } from "../../store/broadcast-store";
 import {
   attachTerminalPaneInputWiring,
   type TerminalContextMenuPosition,
@@ -53,7 +54,17 @@ interface TerminalPaneLifecycleOptions {
   hostKeyPolicy: HostRecord["hostKeyPolicy"];
   hostname: HostRecord["hostname"];
   id: HostRecord["id"];
+  /**
+   * The pane's own id.
+   *
+   * A pane is not a host: a host can be open in two panes at once, and the
+   * broadcast works on PANES. The host id is kept for the session itself.
+   */
+  paneId: string;
   initialPaletteRef: MutableRefObject<TerminalAnsiPalette>;
+  /** The terminal's font family and size, from the font picker. */
+  terminalFontStack: string;
+  terminalFontSize: number;
   intentionalDisconnectRef: MutableRefObject<boolean>;
   label: HostRecord["label"];
   nativeBridgeEnabled: boolean;
@@ -113,7 +124,10 @@ export function useTerminalPaneLifecycle({
   hostKeyPolicy,
   hostname,
   id,
+  paneId,
   initialPaletteRef,
+  terminalFontStack,
+  terminalFontSize,
   intentionalDisconnectRef,
   label,
   nativeBridgeEnabled,
@@ -165,8 +179,8 @@ export function useTerminalPaneLifecycle({
 
     const terminal = new Terminal({
       cursorBlink: true,
-      fontFamily: '"SFMono-Regular", "Menlo", "Monaco", monospace',
-      fontSize: 13,
+      fontFamily: terminalFontStack,
+      fontSize: terminalFontSize,
       scrollback: 10000,
       theme: initialPaletteRef.current,
       // #510: a terminal recreated after a host change starts in the right
@@ -341,7 +355,22 @@ export function useTerminalPaneLifecycle({
       terminal.writeln(line);
     });
 
+    // A pane joins the broadcast by registering a sender for its own input.
+    // The sender reads the socket when it is called, so it always sends to the
+    // session the pane has NOW, not the one it had when it registered — and
+    // it reports whether it sent, so a pane whose session has dropped is
+    // skipped rather than counted.
+    const unregisterBroadcastSender = registerBroadcastSender(paneId, (data) => {
+      const socket = socketRef.current;
+      if (socket?.readyState !== WebSocket.OPEN) {
+        return false;
+      }
+      socket.send(JSON.stringify({ type: "input", data }));
+      return true;
+    });
+
     const { contextMenuHandler, dataDisposable, selectionDisposable } = attachTerminalPaneInputWiring({
+      paneId,
       commandBufferRef,
       connectionStateRef,
       container,
@@ -363,6 +392,7 @@ export function useTerminalPaneLifecycle({
     void initializeTerminalPaneTransport(connectionControlsOptions);
 
     return () => {
+      unregisterBroadcastSender();
       cleanupTerminalPaneLifecycle({
         clearReconnectTimer,
         container,
@@ -391,6 +421,7 @@ export function useTerminalPaneLifecycle({
     hostname,
     hostKeyPolicy,
     id,
+    paneId,
     label,
     demoModeEnabled,
     protocol,

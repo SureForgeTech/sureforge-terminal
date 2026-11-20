@@ -8,6 +8,8 @@ import {
   HTTP_ERROR_DIAGNOSTIC_CHANNEL,
   respondError,
 } from "../../apps/desktop/server/backend-responses.mjs";
+import { ForwardPortInUseError } from "../../apps/desktop/server/backend-forwards.mjs";
+import { SftpOperationError } from "../../apps/desktop/server/backend-sftp-failure.mjs";
 
 // #230 / CodeQL alert 18 (js/stack-trace-exposure). `respondError` used to
 // serialize `Error.message` straight into the HTTP body, so raw ssh2 and fs
@@ -54,12 +56,52 @@ describe("#230: respondError does not relay internal error text", () => {
     expect(JSON.parse(response.recorded.body!)).toEqual({ error: "Internal server error." });
   });
 
+  it("relays a local port that is already in use, and only that reason", () => {
+    // The user chose the port, so the failure has to say what to change:
+    // "Invalid request." names nothing they can act on.
+    const response = recordingResponse();
+
+    respondError(
+      response,
+      new ForwardPortInUseError(
+        "That local port is already in use, so the forward cannot be started. Pick another one."
+      )
+    );
+
+    expect(response.recorded.status).toBe(409);
+    expect(JSON.parse(response.recorded.body!)).toEqual({
+      error:
+        "That local port is already in use, so the forward cannot be started. Pick another one.",
+    });
+  });
+
+  it("relays a refused SFTP subsystem, and only that reason", () => {
+    // The server does not offer SFTP, so its files cannot be browsed: the
+    // client has to be told that rather than "Internal server error.".
+    const response = recordingResponse();
+
+    respondError(
+      response,
+      new SftpOperationError(
+        "That server does not offer the SFTP subsystem, so its files cannot be browsed.",
+        { statusCode: 501 }
+      )
+    );
+
+    expect(response.recorded.status).toBe(501);
+    expect(JSON.parse(response.recorded.body!)).toEqual({
+      error:
+        "That server does not offer the SFTP subsystem, so its files cannot be browsed.",
+    });
+  });
+
   it("relays a refused host key's reason, and only that reason", () => {
     // A refused host key is the one failure whose reason the user has to act
     // on: the difference between "the host is unreachable" and "the key
     // changed". Its message is built by the error itself from the host label
     // and a fixed explanation, so relaying it does not reopen the leak the
-    // tests above pin shut.
+    // tests above pin shut. The category travels beside it, so the client
+    // knows not to retry it.
     const response = recordingResponse();
 
     respondError(
@@ -70,7 +112,40 @@ describe("#230: respondError does not relay internal error text", () => {
     expect(response.recorded.status).toBe(403);
     expect(JSON.parse(response.recorded.body!)).toEqual({
       error: "Host key verification failed for gateway.internal:22.",
+      code: "host_key_mismatch",
     });
+  });
+
+  it("carries the category of a refused host key, so it is not retried", async () => {
+    // The wording alone does not carry the category far enough: a weak-key
+    // refusal reads as an unknown failure to the classifier, and an unknown
+    // failure IS retried — the pane keeps dialling a host whose key was
+    // refused. The category travels beside the message.
+    const { weakHostKeyMessage } = await import(
+      "../../apps/desktop/server/backend-host-keys.mjs"
+    );
+    const { classifySshError } = await import(
+      "../../apps/desktop/src/lib/ssh-error-classifier"
+    );
+    const { shouldScheduleReconnect } = await import(
+      "../../apps/desktop/src/components/terminal/connect-failure-policy"
+    );
+    const response = recordingResponse();
+
+    respondError(
+      response,
+      new HostKeyRejectedError(weakHostKeyMessage("gateway.internal", 22))
+    );
+
+    const body = JSON.parse(response.recorded.body!);
+    expect(body.code).toBe("host_key_mismatch");
+    expect(classifySshError(body).category).toBe("host_key_mismatch");
+    expect(
+      shouldScheduleReconnect(classifySshError(body).category, {
+        connectedOnce: true,
+        reconnectOnRestore: true,
+      })
+    ).toBe(false);
   });
 
   it("still refuses to relay a look-alike error that is not a host-key rejection", () => {
@@ -148,6 +223,283 @@ describe("#230: respondError does not relay internal error text", () => {
   });
 });
 
+describe("a failed connection is reported with a code and a reason", () => {
+  it("relays the reason and the category, and nothing of the underlying error", async () => {
+    // Every SSH failure reached the client as "Internal server error.", which
+    // names no cause. The reason a host could not be reached is the reason
+    // the user has to act on, so the backend sends it — built from fixed text
+    // and the host label — beside the category the client branches on. The
+    // underlying ssh2 error stays on the server.
+    const { SshConnectError, SSH_FAILURE_CODES } = await import(
+      "../../apps/desktop/server/backend-ssh-failure.mjs"
+    );
+    const sentinel = "TS_SSH_CONNECT_PROBE_2b7e91";
+    const response = recordingResponse();
+
+    respondError(
+      response,
+      new SshConnectError("gateway.internal:22 refused the sign-in. Check the username.", {
+        code: SSH_FAILURE_CODES.authFailed,
+        cause: new Error(`All configured authentication methods failed ${sentinel}`),
+      }),
+    );
+
+    expect(response.recorded.status).toBe(502);
+    expect(JSON.parse(response.recorded.body!)).toEqual({
+      error: "gateway.internal:22 refused the sign-in. Check the username.",
+      code: "auth_failed",
+    });
+    // The underlying error text is still not relayed.
+    expect(response.recorded.body).not.toContain(sentinel);
+  });
+
+  it("refuses to relay a look-alike that is not a connection failure", async () => {
+    const { SSH_FAILURE_CODES } = await import(
+      "../../apps/desktop/server/backend-ssh-failure.mjs"
+    );
+    const sentinel = "TS_SSH_CONNECT_LOOKALIKE_PROBE_5c1a44";
+    const impostor = Object.assign(new Error(`refused the sign-in ${sentinel}`), {
+      statusCode: 502,
+      code: SSH_FAILURE_CODES.authFailed,
+    });
+    const response = recordingResponse();
+
+    respondError(response, impostor);
+
+    expect(response.recorded.body).not.toContain(sentinel);
+    expect(JSON.parse(response.recorded.body!)).toEqual({ error: "Internal server error." });
+  });
+
+  it("drops a failure code that is not one of the backend's own", async () => {
+    // The code is a category the client branches on, so it has to be one the
+    // backend chose. The websocket path checks the code against that set; the
+    // HTTP path has to check it the same way, or a future call site could put
+    // an arbitrary string on the wire.
+    const { SshConnectError } = await import("../../apps/desktop/server/backend-ssh-failure.mjs");
+    const response = recordingResponse();
+
+    respondError(
+      response,
+      new SshConnectError("The host refused the sign-in.", { code: "something-else" })
+    );
+
+    expect(JSON.parse(response.recorded.body!)).toEqual({
+      error: "The host refused the sign-in.",
+    });
+  });
+
+  it("keeps a failure code that is one of the backend's own", async () => {
+    const { SshConnectError, SSH_FAILURE_CODES } = await import(
+      "../../apps/desktop/server/backend-ssh-failure.mjs"
+    );
+    const response = recordingResponse();
+
+    respondError(
+      response,
+      new SshConnectError("The host refused the sign-in.", {
+        code: SSH_FAILURE_CODES.authFailed,
+      })
+    );
+
+    expect(JSON.parse(response.recorded.body!)).toEqual({
+      error: "The host refused the sign-in.",
+      code: "auth_failed",
+    });
+  });
+
+  it("relays a refused file operation's reason, and only that reason", async () => {
+    // "Permission denied" and "No such file" are the two failures a user
+    // meets most, and both used to arrive as "Internal server error.".
+    const { SftpOperationError } = await import(
+      "../../apps/desktop/server/backend-sftp-failure.mjs"
+    );
+    const sentinel = "TS_SFTP_RELAY_PROBE_7a1c44";
+    const response = recordingResponse();
+
+    respondError(
+      response,
+      new SftpOperationError("The server refused access to that path.", {
+        statusCode: 403,
+        cause: new Error(`Permission denied: ${sentinel}`),
+      })
+    );
+
+    expect(response.recorded.status).toBe(403);
+    expect(JSON.parse(response.recorded.body!)).toEqual({
+      error: "The server refused access to that path.",
+    });
+    // The server's own wording is still not relayed.
+    expect(response.recorded.body).not.toContain(sentinel);
+  });
+
+  it("still refuses to relay a look-alike that is not a file-operation failure", async () => {
+    const { SFTP_STATUS } = await import(
+      "../../apps/desktop/server/backend-sftp-failure.mjs"
+    );
+    const sentinel = "TS_SFTP_LOOKALIKE_PROBE_9d3b21";
+    const impostor = Object.assign(new Error(`refused access ${sentinel}`), {
+      statusCode: 403,
+      code: SFTP_STATUS.permissionDenied,
+    });
+    const response = recordingResponse();
+
+    respondError(response, impostor);
+
+    // The exception is by TYPE: the look-alike gets the generic text for the
+    // status it carries, and none of its own wording.
+    expect(response.recorded.body).not.toContain(sentinel);
+    expect(JSON.parse(response.recorded.body!)).toEqual({ error: "Invalid request." });
+  });
+
+  it("relays a refused forward request's reason, and only that reason", async () => {
+    const { InvalidForwardRequestError } = await import(
+      "../../apps/desktop/server/backend-forwards.mjs"
+    );
+    const response = recordingResponse();
+
+    respondError(
+      response,
+      new InvalidForwardRequestError("Local bind port must be 0 (automatic) or 1-65535")
+    );
+
+    expect(response.recorded.status).toBe(400);
+    expect(JSON.parse(response.recorded.body!)).toEqual({
+      error: "Local bind port must be 0 (automatic) or 1-65535",
+    });
+  });
+
+  it("still refuses to relay a look-alike that is not a forward refusal", async () => {
+    // The exception is by TYPE. Swapping the type check for a name check
+    // would relay any impostor's text to the client.
+    const sentinel = "TS_FORWARD_LOOKALIKE_PROBE_5b8e17";
+    const impostor = Object.assign(new Error(`Local bind port must be ${sentinel}`), {
+      statusCode: 400,
+      name: "InvalidForwardRequestError",
+    });
+    const response = recordingResponse();
+
+    respondError(response, impostor);
+
+    expect(response.recorded.body).not.toContain(sentinel);
+    expect(JSON.parse(response.recorded.body!)).toEqual({ error: "Invalid request." });
+  });
+
+  it("carries the category of a refused sign-in method, so it is not retried", async () => {
+    // A refused sign-in METHOD is a configuration problem: the same request
+    // would be refused the same way, so retrying it cannot help.
+    const { SshAuthRefusedError } = await import(
+      "../../apps/desktop/server/backend-ssh-auth.mjs"
+    );
+    const { classifySshError } = await import(
+      "../../apps/desktop/src/lib/ssh-error-classifier"
+    );
+    const { shouldScheduleReconnect } = await import(
+      "../../apps/desktop/src/components/terminal/connect-failure-policy"
+    );
+    const response = recordingResponse();
+
+    respondError(
+      response,
+      new SshAuthRefusedError("This host needs a public key, but sign-in was refused.", 400)
+    );
+
+    const body = JSON.parse(response.recorded.body!);
+    expect(body.code).toBe("auth_failed");
+    expect(
+      shouldScheduleReconnect(classifySshError(body).category, {
+        connectedOnce: true,
+        reconnectOnRestore: true,
+      })
+    ).toBe(false);
+  });
+
+  it("checks the websocket failure code against the backend's own set too", async () => {
+    // The HTTP path and the websocket path have to agree about which codes
+    // may go on the wire. The decision itself is pinned by the behaviour test
+    // in backend-failure-codes.integration.test.ts; this pins that the
+    // websocket path uses that decision rather than a check of its own.
+    // Source-contract test because importing backend.mjs binds a port.
+    const { readFile } = await import("node:fs/promises");
+    const source = await readFile("apps/desktop/server/backend.mjs", "utf8");
+
+    expect(source).toContain("relayableFailureCode(error)");
+    // Both the live broadcast and the replay of a failure to a websocket
+    // that attaches later go through the same frame builder, so neither can
+    // lose the category.
+    expect(source.match(/sessionFailureFrame\(session\)/g)?.length).toBe(2);
+  });
+
+  it("classifies the ssh2 failures into the categories the client knows", async () => {
+    const { sshConnectFailure, SSH_FAILURE_CODES } = await import(
+      "../../apps/desktop/server/backend-ssh-failure.mjs"
+    );
+    const host = { hostname: "gateway.internal", port: 22 };
+
+    const refused = sshConnectFailure(
+      Object.assign(new Error("connect ECONNREFUSED 192.0.2.1:22"), {
+        level: "client-socket",
+        code: "ECONNREFUSED",
+      }),
+      host,
+    );
+    expect(refused.code).toBe(SSH_FAILURE_CODES.refused);
+
+    const dns = sshConnectFailure(
+      Object.assign(new Error("Error while looking up IPv4 address"), { level: "client-dns" }),
+      host,
+    );
+    expect(dns.code).toBe(SSH_FAILURE_CODES.dnsFailure);
+
+    const auth = sshConnectFailure(
+      Object.assign(new Error("All configured authentication methods failed"), {
+        level: "client-authentication",
+      }),
+      host,
+    );
+    expect(auth.code).toBe(SSH_FAILURE_CODES.authFailed);
+
+    const timeout = sshConnectFailure(
+      Object.assign(new Error("Timed out while waiting for handshake"), { level: "client-timeout" }),
+      host,
+    );
+    expect(timeout.code).toBe(SSH_FAILURE_CODES.timeout);
+  });
+
+  it("keeps a refused sign-in out of the retry path", async () => {
+    // A refused sign-in must not be retried: repeated failed logins can lock
+    // the account. The client's classifier reads the code, so the category
+    // survives the fixed message.
+    const { sshConnectFailure, SSH_FAILURE_CODES } = await import(
+      "../../apps/desktop/server/backend-ssh-failure.mjs"
+    );
+    const { classifySshError } = await import(
+      "../../apps/desktop/src/lib/ssh-error-classifier"
+    );
+    const { shouldScheduleReconnect } = await import(
+      "../../apps/desktop/src/components/terminal/connect-failure-policy"
+    );
+
+    const failure = sshConnectFailure(
+      Object.assign(new Error("All configured authentication methods failed"), {
+        level: "client-authentication",
+      }),
+      { hostname: "gateway.internal", port: 22 },
+    );
+    expect(failure.code).toBe(SSH_FAILURE_CODES.authFailed);
+
+    const classified = classifySshError(
+      Object.assign(new Error(failure.message), { code: failure.code }),
+    );
+    expect(classified.category).toBe("auth_failed");
+    expect(
+      shouldScheduleReconnect(classified.category, {
+        connectedOnce: true,
+        reconnectOnRestore: true,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("#230: the surrounding contract is unchanged", () => {
   it("leaves the WebSocket failSession diagnostics carrying the real message", async () => {
     // Sanitizing getErrorMessage would have been the easy fix and would have
@@ -160,7 +512,12 @@ describe("#230: the surrounding contract is unchanged", () => {
     // remembered on the session, so a websocket that attaches after the
     // failure is replayed it rather than being told nothing.
     expect(source).toMatch(/session\.failureMessage = getErrorMessage\(error\);/);
-    expect(source).toMatch(/function failSession\(session, error\) \{[\s\S]*?message: session\.failureMessage,/);
+    // The frame itself is built in its own module, so it can be tested
+    // without importing backend.mjs (which binds a port). It carries the
+    // remembered message and the category beside it.
+    const frames = await readFile("apps/desktop/server/backend-session-frames.mjs", "utf8");
+    expect(frames).toContain("message: session.failureMessage,");
+    expect(source).toContain("sessionFailureFrame(session)");
   });
 
   it("still routes the glob endpoint's refusal through an explicit 400", async () => {

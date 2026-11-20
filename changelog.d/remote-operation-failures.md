@@ -1,0 +1,1 @@
+- [FIX] Browser mode: a file operation the server refuses now says what was refused — permission denied, a path that does not exist, an operation the server does not support — instead of "Internal server error.", and a forward request with a mistyped port says which port is wrong.

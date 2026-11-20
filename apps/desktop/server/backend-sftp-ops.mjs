@@ -6,6 +6,7 @@ import {
   SFTP_UPLOAD_TIMEOUT_MS,
 } from "./backend-deadline.mjs";
 import { resolveRemotePath, sanitizeFilename } from "./backend-paths.mjs";
+import { sftpOperationFailure } from "./backend-sftp-failure.mjs";
 
 const FILE_TYPE_MASK = 0o170000;
 const DIRECTORY_TYPE = 0o040000;
@@ -50,7 +51,7 @@ export function createSftpOperations({ withSftp }) {
       const entries = await new Promise((resolve, reject) => {
         sftp.readdir(targetPath, (error, list) => {
           if (error) {
-            reject(error);
+            reject(sftpOperationFailure(error));
             return;
           }
 
@@ -89,7 +90,7 @@ export function createSftpOperations({ withSftp }) {
       await new Promise((resolve, reject) => {
         sftp.mkdir(targetPath, (error) => {
           if (error) {
-            reject(error);
+            reject(sftpOperationFailure(error));
             return;
           }
 
@@ -109,7 +110,7 @@ export function createSftpOperations({ withSftp }) {
       await new Promise((resolve, reject) => {
         sftp.rename(sourcePath, targetPath, (error) => {
           if (error) {
-            reject(error);
+            reject(sftpOperationFailure(error));
             return;
           }
 
@@ -128,7 +129,7 @@ export function createSftpOperations({ withSftp }) {
       await new Promise((resolve, reject) => {
         const done = (error) => {
           if (error) {
-            reject(error);
+            reject(sftpOperationFailure(error));
             return;
           }
 
@@ -154,7 +155,7 @@ export function createSftpOperations({ withSftp }) {
       const handle = await new Promise((resolve, reject) => {
         sftp.open(targetPath, "w", (error, nextHandle) => {
           if (error) {
-            reject(error);
+            reject(sftpOperationFailure(error));
             return;
           }
 
@@ -174,29 +175,44 @@ export function createSftpOperations({ withSftp }) {
         sftp.close(handle, () => {});
       });
 
+      let writeError;
       try {
         await new Promise((resolve, reject) => {
           sftp.write(handle, buffer, 0, buffer.length, 0, (error) => {
             if (error) {
-              reject(error);
+              reject(sftpOperationFailure(error));
               return;
             }
 
             resolve();
           });
         });
-      } finally {
-        closeStarted = true;
-        await new Promise((resolve, reject) => {
-          sftp.close(handle, (error) => {
-            if (error) {
-              reject(error);
-              return;
-            }
+      } catch (error) {
+        writeError = error;
+      }
 
-            resolve();
-          });
-        });
+      // The handle is closed whatever happened. A close failure must not
+      // REPLACE the write's failure: the write is the reason the upload
+      // failed, and it is the reason the user needs. The close is only
+      // reported when the write succeeded.
+      closeStarted = true;
+      const closeError = await new Promise((resolve) => {
+        sftp.close(handle, (error) => resolve(error));
+      }).catch((error) => {
+        // A close that throws outright, rather than reporting a status, is
+        // still a failure — but only when the write succeeded. When the write
+        // already failed, the write's reason is the one that matters.
+        if (!writeError) {
+          throw error;
+        }
+        return undefined;
+      });
+
+      if (writeError) {
+        throw writeError;
+      }
+      if (closeError) {
+        throw sftpOperationFailure(closeError);
       }
 
       return targetPath;
@@ -220,7 +236,7 @@ export function createSftpOperations({ withSftp }) {
         const fileStats = await new Promise((resolve, reject) => {
           sftp.stat(targetPath, (error, stats) => {
             if (error) {
-              reject(error);
+              reject(sftpOperationFailure(error));
               return;
             }
 
@@ -259,6 +275,13 @@ export function createSftpOperations({ withSftp }) {
 
         try {
           await pipeline(readStream, response);
+        } catch (error) {
+          // A read failure is an SFTP status failure like any other (the file
+          // can vanish between the stat and the open), so it is wrapped the
+          // same way. The headers are already committed by this point, so the
+          // client sees the transfer fail rather than the message — the stat
+          // above is what catches the usual "no such file" before that.
+          throw sftpOperationFailure(error);
         } finally {
           readStream.off("open", onProgress);
           readStream.off("data", onProgress);
