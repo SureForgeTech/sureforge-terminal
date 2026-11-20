@@ -31,9 +31,13 @@ Only the **delivery**, which needs the repository owner's credentials:
 
 ## The exact next step
 
-**The branch is pushed and the pull request is open: https://github.com/SureForgeTech/sureforge-terminal/pull/623** (base `main`, head `wip/sureforge-terminal-features`, state OPEN, MERGEABLE, 102 files, +16748 / -292). The checks `validate`, `rust-validate`, `CodeQL` and the sign-off check are running on it.
+**Nothing — the work is merged.** `main` carries it as `04d39a2` (the squash of #623).
 
-The remaining step is the owner's: wait for those checks to go green, resolve any review threads, and **squash-merge**. Squash only — the `main` rulesets allow no other merge method.
+**MERGED.** Pull request #623 (https://github.com/SureForgeTech/sureforge-terminal/pull/623) was squash-merged into `main` on 2026-11-20 as `04d39a2` — "feat: five features, and the browser-backend failures they build on", 103 files, +16783 / -292.
+
+Every check was green on the head it merged: `validate` (6m56s), `rust-validate` (9m23s), `CodeQL`, both CodeQL analyses, the sign-off check and `native-ssh-fixtures` all passed, and there were no review threads. The merged tree's product code is byte-identical to the reviewed branch.
+
+Nothing is left to merge. The branch `wip/sureforge-terminal-features` is kept on the remote as the record of the work; `main` now carries the change.
 
 If the pull request is opened again from scratch, the commands are:
 
@@ -60,10 +64,10 @@ Two constraints the owner must respect:
 
 ## Branch, commit, pull request
 
-- Branch: `wip/sureforge-terminal-features`, head `2127855` — *"fix(build): the example token in the tests tripped the secret scan"*. It carries the reviewed head `1d9a61c`, the two backend follow-ups, the `docs/handoff/` folder, and a merge of the base branch. That merge is what made the push possible: the branch carried an older copy of `.github/workflows/dco.yml` than `main`, and the App has no `workflows` permission, so GitHub refused a push that would have updated a workflow file. The merge takes `main`'s own copy, so the branch modifies no workflow; the product code is byte-identical to the reviewed head, and the delivery rules keep a review across a clean merge of the base branch.
+- Branch: `wip/sureforge-terminal-features` — the branch that was merged; `main` is now `04d39a2`. It carries the reviewed head `1d9a61c`, the two backend follow-ups, the `docs/handoff/` folder, and a merge of the base branch. That merge is what made the push possible: the branch carried an older copy of `.github/workflows/dco.yml` than `main`, and the App has no `workflows` permission, so GitHub refused a push that would have updated a workflow file. The merge takes `main`'s own copy, so the branch modifies no workflow; the product code is byte-identical to the reviewed head, and the delivery rules keep a review across a clean merge of the base branch.
 - The reviewed product head, if the owner prefers to push only the product change: `1d9a61cf5955e5b428eb0029db7dbd024d0b3301` — *"fix(features): the fifteenth round of review finding, and the plain value that grew"*.
 - `main` in this checkout still points at `1d9a61c` and was not modified.
-- Open pull request: **#623** — https://github.com/SureForgeTech/sureforge-terminal/pull/623 (base `main`, head `wip/sureforge-terminal-features`, OPEN, MERGEABLE). It is not merged.
+- Pull request: **#623** — https://github.com/SureForgeTech/sureforge-terminal/pull/623 — **MERGED** into `main` on 2026-11-20 as `04d39a2` (squash).
 
 ## Decisions made, and why
 
