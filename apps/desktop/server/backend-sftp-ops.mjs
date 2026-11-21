@@ -8,6 +8,9 @@ import {
 import { resolveRemotePath, sanitizeFilename } from "./backend-paths.mjs";
 import { sftpOperationFailure } from "./backend-sftp-failure.mjs";
 
+// How long the listing waits for a link's target before giving up on it.
+const LINK_TARGET_TIMEOUT_MS = 2_000;
+
 const FILE_TYPE_MASK = 0o170000;
 const DIRECTORY_TYPE = 0o040000;
 const LINK_TYPE = 0o120000;
@@ -44,6 +47,48 @@ export function toIsoTimestamp(unixSeconds) {
   return new Date(unixSeconds * 1000).toISOString();
 }
 
+/**
+ * What a link points at.
+ *
+ * A symlink's own mode says it is a link, not what it points at, so a
+ * directory reached through one is listed as a file — and a file browser
+ * then offers to download a directory it cannot read. The target is
+ * resolved with one stat, and only for the links in a listing, which are
+ * few.
+ *
+ * A link that points at nothing stays a file: there is no target to read,
+ * and saying "directory" would send the user into a path that cannot be
+ * opened.
+ */
+async function linkTargetIsDirectory(sftp, entryPath) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+
+    // A target that never answers must not take the listing with it: the
+    // link stays a file, and the listing is delivered.
+    const timer = setTimeout(() => finish(false), LINK_TARGET_TIMEOUT_MS);
+    if (typeof timer.unref === "function") {
+      timer.unref();
+    }
+
+    sftp.stat(entryPath, (error, stats) => {
+      if (error || !stats) {
+        finish(false);
+        return;
+      }
+      finish(isDirectory(stats));
+    });
+  });
+}
+
 export function createSftpOperations({ withSftp }) {
   async function listRemoteDirectory(host, pathname) {
     return withSftp(host, async ({ sftp }) => {
@@ -59,26 +104,42 @@ export function createSftpOperations({ withSftp }) {
         });
       });
 
+      const visible = entries.filter(
+        (entry) => entry.filename !== "." && entry.filename !== ".."
+      );
+
+      const mapped = [];
+      for (const entry of visible) {
+        const entryPath = resolveRemotePath(targetPath, entry.filename);
+        const linked = isLink(entry.attrs, entry.longname);
+        let kind = isDirectory(entry.attrs, entry.longname) ? "directory" : "file";
+        if (linked && kind === "file") {
+          // A link's own mode says it is a link, not what it points at, so a
+          // directory reached through one would be listed as a file — and a
+          // file browser would offer to download a directory it cannot read.
+          kind = (await linkTargetIsDirectory(sftp, entryPath)) ? "directory" : "file";
+        }
+
+        mapped.push({
+          name: entry.filename,
+          path: entryPath,
+          kind,
+          size: entry.attrs?.size ?? 0,
+          permissions: formatPermissions(entry.attrs?.mode),
+          modifiedAt: toIsoTimestamp(entry.attrs?.mtime),
+          linked,
+        });
+      }
+
       return {
         path: targetPath,
-        entries: entries
-          .filter((entry) => entry.filename !== "." && entry.filename !== "..")
-          .map((entry) => ({
-            name: entry.filename,
-            path: resolveRemotePath(targetPath, entry.filename),
-            kind: isDirectory(entry.attrs, entry.longname) ? "directory" : "file",
-            size: entry.attrs?.size ?? 0,
-            permissions: formatPermissions(entry.attrs?.mode),
-            modifiedAt: toIsoTimestamp(entry.attrs?.mtime),
-            linked: isLink(entry.attrs, entry.longname),
-          }))
-          .sort((left, right) => {
-            if (left.kind !== right.kind) {
-              return left.kind === "directory" ? -1 : 1;
-            }
+        entries: mapped.sort((left, right) => {
+          if (left.kind !== right.kind) {
+            return left.kind === "directory" ? -1 : 1;
+          }
 
-            return left.name.localeCompare(right.name);
-          }),
+          return left.name.localeCompare(right.name);
+        }),
       };
     });
   }

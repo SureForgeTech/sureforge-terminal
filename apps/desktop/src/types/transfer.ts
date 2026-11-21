@@ -7,6 +7,8 @@ export interface RemoteFileEntry {
   size: number;
   modifiedAt?: string;
   permissions?: string;
+  /** The entry is a symlink, whatever it points at. */
+  linked?: boolean;
 }
 
 export type TransferDirection = "upload" | "download" | "remote";

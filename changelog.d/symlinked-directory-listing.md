@@ -1,0 +1,1 @@
+- [FIX] The file browser lists a link to a directory as a directory, instead of offering to download it. (#625)
