@@ -20,7 +20,6 @@ use std::{
 };
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use chrono::{Datelike, NaiveDate, TimeZone, Utc};
 use getrandom::fill;
 use portable_pty::{
     native_pty_system, Child, ChildKiller, CommandBuilder, ExitStatus, MasterPty, PtySize,
@@ -7378,6 +7377,11 @@ lrwxr-xr-x    1 ops ops  11 Mar 31 12:00 current -> releases
         assert_eq!(entries[1].path, "/srv/current");
         assert_eq!(entries[2].name, "README.md");
         assert_eq!(entries[2].permissions.as_deref(), Some("644"));
+        assert_eq!(
+            entries[2].modified_at.as_deref(),
+            Some("2026-04-01T00:00:00+00:00")
+        );
+        assert_eq!(parse_sftp_modified_at("Feb", "29", "2026"), None);
     }
 
     #[test]
