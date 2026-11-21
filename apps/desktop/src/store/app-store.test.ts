@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_TERMINAL_THEME } from "../lib/terminal-themes";
+import { DEFAULT_TERMINAL_FONT, DEFAULT_TERMINAL_FONT_SIZE } from "../lib/terminal-fonts";
 import {
   buildBaselineDefaults,
   migrateAppState,
@@ -14,6 +15,26 @@ afterEach(() => {
 });
 
 describe("app store preferences", () => {
+  it("keeps the terminal font and the history redaction as preferences", () => {
+    const state = useAppStore.getState();
+
+    // The parity matrix named the font picker as the last of the
+    // shell-preference gaps: the terminal had one hard-coded family and size.
+    expect(state.terminalFont).toBe(DEFAULT_TERMINAL_FONT);
+    expect(state.terminalFontSize).toBe(DEFAULT_TERMINAL_FONT_SIZE);
+    // The history keeps a preview of what a command printed, and that preview
+    // is persisted: a secret in it should not be.
+    expect(state.redactCommandOutput).toBe(true);
+
+    useAppStore.getState().setTerminalFont("menlo");
+    useAppStore.getState().setTerminalFontSize(16);
+    useAppStore.getState().setRedactCommandOutput(false);
+
+    expect(useAppStore.getState().terminalFont).toBe("menlo");
+    expect(useAppStore.getState().terminalFontSize).toBe(16);
+    expect(useAppStore.getState().redactCommandOutput).toBe(false);
+  });
+
   it("defaults to a dense workspace with section shortcuts and demo mode enabled", () => {
     const state = useAppStore.getState();
 

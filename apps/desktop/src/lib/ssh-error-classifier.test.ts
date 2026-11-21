@@ -27,6 +27,55 @@ describe("classifySshError", () => {
     expect(result.hint).toMatch(/MITM/);
   });
 
+  it("names a refused weak key for what it is, and not a changed key", () => {
+    // #475: a DSA (ssh-dss) key is refused for being too weak. The key did
+    // not change, so the message must not tell the user to re-scan it or
+    // suspect an attack that is not there.
+    const weak =
+      "example.test:22 offered only a DSA (ssh-dss) host key, which is too weak to trust, " +
+      "so the connection was refused and credentials were not sent.";
+
+    const classified = classifySshError({ message: weak });
+
+    expect(classified.category).toBe("host_key_mismatch");
+    expect(classified.message).toBe("The host key is too weak to trust.");
+    expect(classified.hint).toContain("Ed25519");
+    expect(classified.message).not.toContain("changed");
+  });
+
+  it("names a refused weak key the same way when the error carries a code", () => {
+    // The browser backend sends the refusal with the host_key_mismatch code,
+    // and the code path must not fall back to the changed-key wording.
+    const weak =
+      "example.test:22 offered only a DSA (ssh-dss) host key, which is too weak to trust.";
+
+    const classified = classifySshError({ code: "host_key_mismatch", message: weak });
+
+    expect(classified.category).toBe("host_key_mismatch");
+    expect(classified.message).toBe("The host key is too weak to trust.");
+  });
+
+  it("does not call a private or user key of the same algorithm a host key", () => {
+    // A DSA (ssh-dss) private key that will not load is a different failure
+    // with a different fix, and it must not be reported as a host key that
+    // was refused.
+    for (const message of [
+      "Failed to load DSA (ssh-dss) private key",
+      "DSA (ssh-dss) user key refused by the server",
+    ]) {
+      const classified = classifySshError(new Error(message));
+
+      expect(classified.message).not.toBe("The host key is too weak to trust.");
+      expect(classified.category).not.toBe("host_key_mismatch");
+    }
+  });
+
+  it("still names a changed key as a changed key", () => {
+    const classified = classifySshError({ message: "REMOTE HOST IDENTIFICATION HAS CHANGED" });
+
+    expect(classified.message).toBe("Host key has changed.");
+  });
+
   it("classifies ENETUNREACH as network_unreachable", () => {
     const result = classifySshError(new Error("connect ENETUNREACH 10.0.0.1:22"));
     expect(result.category).toBe("network_unreachable");

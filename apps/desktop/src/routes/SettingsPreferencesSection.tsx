@@ -6,6 +6,7 @@ import { formatPrimaryShortcut } from "../lib/shortcuts";
 import { cn } from "../lib/utils";
 import { useAppStore } from "../store/app-store";
 import { listTerminalThemeOptions, type TerminalThemeName } from "../lib/terminal-themes";
+import { listTerminalFontOptions, TERMINAL_FONT_SIZES } from "../lib/terminal-fonts";
 import { errorMessageFromUnknown } from "../lib/error-message";
 
 export function SettingsPreferencesSection() {
@@ -22,6 +23,13 @@ export function SettingsPreferencesSection() {
   const terminalThemeOptions = listTerminalThemeOptions();
   const terminalScreenReaderMode = useAppStore((state) => state.terminalScreenReaderMode);
   const setTerminalScreenReaderMode = useAppStore((state) => state.setTerminalScreenReaderMode);
+  const redactCommandOutput = useAppStore((state) => state.redactCommandOutput);
+  const setRedactCommandOutput = useAppStore((state) => state.setRedactCommandOutput);
+  const terminalFont = useAppStore((state) => state.terminalFont);
+  const setTerminalFont = useAppStore((state) => state.setTerminalFont);
+  const terminalFontSize = useAppStore((state) => state.terminalFontSize);
+  const setTerminalFontSize = useAppStore((state) => state.setTerminalFontSize);
+  const terminalFontOptions = listTerminalFontOptions();
   // T17-T20 polish toggles.
   const appShellTheme = useAppStore((state) => state.appShellTheme);
   const setAppShellTheme = useAppStore((state) => state.setAppShellTheme);
@@ -104,6 +112,35 @@ export function SettingsPreferencesSection() {
                 Lets screen readers read terminal output, including in terminals already open. It
                 uses more memory and can slow very busy output, so it is off by default.
               </p>
+
+              <div className="mt-4 rounded-[16px] border border-slate-800 bg-slate-900/60 p-3">
+                <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                  Session history
+                </p>
+                <button
+                  type="button"
+                  aria-pressed={redactCommandOutput}
+                  onClick={() => setRedactCommandOutput(!redactCommandOutput)}
+                  className={cn(
+                    "mt-2 inline-flex items-center gap-2 rounded-[14px] border px-3 py-2 text-sm transition",
+                    redactCommandOutput
+                      ? "border-emerald-400/50 bg-emerald-400/10 text-emerald-100"
+                      : "border-slate-800 bg-slate-950/70 text-slate-300 hover:border-slate-700 hover:text-white"
+                  )}
+                >
+                  <span>
+                    {redactCommandOutput
+                      ? "Redact secrets in command output on"
+                      : "Redact secrets in command output off"}
+                  </span>
+                </button>
+                <p className="mt-2 text-sm leading-5 text-slate-300">
+                  The session history keeps a preview of what each command printed, and that preview
+                  is saved across restarts. With this on, a password, a token or an API key in the
+                  output is replaced before it is kept, so the history stays useful without keeping
+                  the secret.
+                </p>
+              </div>
             </div>
 
             <div className="rounded-[16px] border border-slate-800 bg-slate-900/60 p-3">
@@ -174,6 +211,81 @@ export function SettingsPreferencesSection() {
             </div>
 
             <div className="rounded-[16px] border border-slate-800 bg-slate-900/60 p-3 lg:col-span-2">
+              <div className="rounded-[16px] border border-slate-800 bg-slate-900/60 p-3 lg:col-span-2">
+                <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                  Terminal font
+                </p>
+                <p className="mt-1 text-sm leading-5 text-slate-300">
+                  Pick the font every terminal pane uses, and how large it is. Font changes apply
+                  live, to terminals that are already open, without disconnecting a session.
+                </p>
+                <div
+                  role="radiogroup"
+                  aria-label="Terminal font"
+                  className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3"
+                >
+                  {terminalFontOptions.map((option) => {
+                    const selected = terminalFont === option.name;
+                    return (
+                      <button
+                        key={option.name}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        aria-label={option.label}
+                        onClick={() => setTerminalFont(option.name)}
+                        className={cn(
+                          "rounded-[14px] border px-3 py-2 text-left transition",
+                          selected
+                            ? "border-emerald-400/60 bg-emerald-400/10 text-emerald-50"
+                            : "border-slate-800 bg-slate-950/70 text-slate-300 hover:border-slate-700 hover:text-white"
+                        )}
+                      >
+                        <span className="block text-sm font-medium">{option.label}</span>
+                        <span
+                          className="mt-0.5 block truncate text-[11px] leading-4 text-slate-400"
+                          style={{ fontFamily: option.stack }}
+                        >
+                          ls -la /var/log
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="mt-3">
+                  <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                    Font size
+                  </p>
+                  <div
+                    role="radiogroup"
+                    aria-label="Terminal font size"
+                    className="mt-2 flex flex-wrap gap-2"
+                  >
+                    {TERMINAL_FONT_SIZES.map((size) => {
+                      const selected = terminalFontSize === size;
+                      return (
+                        <button
+                          key={size}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          aria-label={`${size} point`}
+                          onClick={() => setTerminalFontSize(size)}
+                          className={cn(
+                            "rounded-[12px] border px-3 py-1.5 text-sm transition",
+                            selected
+                              ? "border-emerald-400/60 bg-emerald-400/10 text-emerald-50"
+                              : "border-slate-800 bg-slate-950/70 text-slate-300 hover:border-slate-700 hover:text-white"
+                          )}
+                        >
+                          {size}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
               <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
                 Terminal theme
               </p>

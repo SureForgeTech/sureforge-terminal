@@ -7,6 +7,8 @@
  * that into "[object Object]". Every caller that shows or logs an error goes
  * through this instead.
  */
+import { isSshErrorCategory, type SshErrorCategory } from "./ssh-error-classifier";
+
 /** Shown when a failure carries no usable text, so an error is never blank. */
 export const UNKNOWN_ERROR_MESSAGE = "The action failed, and no reason was given.";
 
@@ -53,4 +55,35 @@ export function backendErrorMessageFromBody(body: string, status: number): strin
     return body;
   }
   return `Backend request failed: ${status}`;
+}
+
+/**
+ * The failure code a backend body carries, when it carries one.
+ *
+ * A failed connection answers with the category beside the message — the same
+ * typed `{ code, message }` shape the native shell sends (see
+ * src-tauri/src/ipc_error.rs). The classifier reads the code first, so a
+ * refused sign-in stays a refused sign-in and is not retried; reading the
+ * message alone would classify it as unknown, and an unknown failure is
+ * retried.
+ *
+ * Only a category this app knows is returned: anything else is ignored, so a
+ * body cannot steer the retry policy with a code of its own.
+ */
+export function backendErrorCodeFromBody(body: string): SshErrorCategory | undefined {
+  if (!body) {
+    return undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (parsed && typeof parsed === "object" && "code" in parsed) {
+      const code = (parsed as { code: unknown }).code;
+      if (isSshErrorCategory(code)) {
+        return code;
+      }
+    }
+  } catch {
+    // Not JSON: there is no code.
+  }
+  return undefined;
 }

@@ -6,6 +6,10 @@ import {
   SFTP_UPLOAD_TIMEOUT_MS,
 } from "./backend-deadline.mjs";
 import { resolveRemotePath, sanitizeFilename } from "./backend-paths.mjs";
+import { sftpOperationFailure } from "./backend-sftp-failure.mjs";
+
+// How long the listing waits for a link's target before giving up on it.
+const LINK_TARGET_TIMEOUT_MS = 2_000;
 
 const FILE_TYPE_MASK = 0o170000;
 const DIRECTORY_TYPE = 0o040000;
@@ -43,6 +47,48 @@ export function toIsoTimestamp(unixSeconds) {
   return new Date(unixSeconds * 1000).toISOString();
 }
 
+/**
+ * What a link points at.
+ *
+ * A symlink's own mode says it is a link, not what it points at, so a
+ * directory reached through one is listed as a file — and a file browser
+ * then offers to download a directory it cannot read. The target is
+ * resolved with one stat, and only for the links in a listing, which are
+ * few.
+ *
+ * A link that points at nothing stays a file: there is no target to read,
+ * and saying "directory" would send the user into a path that cannot be
+ * opened.
+ */
+async function linkTargetIsDirectory(sftp, entryPath) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+
+    // A target that never answers must not take the listing with it: the
+    // link stays a file, and the listing is delivered.
+    const timer = setTimeout(() => finish(false), LINK_TARGET_TIMEOUT_MS);
+    if (typeof timer.unref === "function") {
+      timer.unref();
+    }
+
+    sftp.stat(entryPath, (error, stats) => {
+      if (error || !stats) {
+        finish(false);
+        return;
+      }
+      finish(isDirectory(stats));
+    });
+  });
+}
+
 export function createSftpOperations({ withSftp }) {
   async function listRemoteDirectory(host, pathname) {
     return withSftp(host, async ({ sftp }) => {
@@ -50,7 +96,7 @@ export function createSftpOperations({ withSftp }) {
       const entries = await new Promise((resolve, reject) => {
         sftp.readdir(targetPath, (error, list) => {
           if (error) {
-            reject(error);
+            reject(sftpOperationFailure(error));
             return;
           }
 
@@ -58,26 +104,42 @@ export function createSftpOperations({ withSftp }) {
         });
       });
 
+      const visible = entries.filter(
+        (entry) => entry.filename !== "." && entry.filename !== ".."
+      );
+
+      const mapped = [];
+      for (const entry of visible) {
+        const entryPath = resolveRemotePath(targetPath, entry.filename);
+        const linked = isLink(entry.attrs, entry.longname);
+        let kind = isDirectory(entry.attrs, entry.longname) ? "directory" : "file";
+        if (linked && kind === "file") {
+          // A link's own mode says it is a link, not what it points at, so a
+          // directory reached through one would be listed as a file — and a
+          // file browser would offer to download a directory it cannot read.
+          kind = (await linkTargetIsDirectory(sftp, entryPath)) ? "directory" : "file";
+        }
+
+        mapped.push({
+          name: entry.filename,
+          path: entryPath,
+          kind,
+          size: entry.attrs?.size ?? 0,
+          permissions: formatPermissions(entry.attrs?.mode),
+          modifiedAt: toIsoTimestamp(entry.attrs?.mtime),
+          linked,
+        });
+      }
+
       return {
         path: targetPath,
-        entries: entries
-          .filter((entry) => entry.filename !== "." && entry.filename !== "..")
-          .map((entry) => ({
-            name: entry.filename,
-            path: resolveRemotePath(targetPath, entry.filename),
-            kind: isDirectory(entry.attrs, entry.longname) ? "directory" : "file",
-            size: entry.attrs?.size ?? 0,
-            permissions: formatPermissions(entry.attrs?.mode),
-            modifiedAt: toIsoTimestamp(entry.attrs?.mtime),
-            linked: isLink(entry.attrs, entry.longname),
-          }))
-          .sort((left, right) => {
-            if (left.kind !== right.kind) {
-              return left.kind === "directory" ? -1 : 1;
-            }
+        entries: mapped.sort((left, right) => {
+          if (left.kind !== right.kind) {
+            return left.kind === "directory" ? -1 : 1;
+          }
 
-            return left.name.localeCompare(right.name);
-          }),
+          return left.name.localeCompare(right.name);
+        }),
       };
     });
   }
@@ -89,7 +151,7 @@ export function createSftpOperations({ withSftp }) {
       await new Promise((resolve, reject) => {
         sftp.mkdir(targetPath, (error) => {
           if (error) {
-            reject(error);
+            reject(sftpOperationFailure(error));
             return;
           }
 
@@ -109,7 +171,7 @@ export function createSftpOperations({ withSftp }) {
       await new Promise((resolve, reject) => {
         sftp.rename(sourcePath, targetPath, (error) => {
           if (error) {
-            reject(error);
+            reject(sftpOperationFailure(error));
             return;
           }
 
@@ -128,7 +190,7 @@ export function createSftpOperations({ withSftp }) {
       await new Promise((resolve, reject) => {
         const done = (error) => {
           if (error) {
-            reject(error);
+            reject(sftpOperationFailure(error));
             return;
           }
 
@@ -154,7 +216,7 @@ export function createSftpOperations({ withSftp }) {
       const handle = await new Promise((resolve, reject) => {
         sftp.open(targetPath, "w", (error, nextHandle) => {
           if (error) {
-            reject(error);
+            reject(sftpOperationFailure(error));
             return;
           }
 
@@ -174,29 +236,44 @@ export function createSftpOperations({ withSftp }) {
         sftp.close(handle, () => {});
       });
 
+      let writeError;
       try {
         await new Promise((resolve, reject) => {
           sftp.write(handle, buffer, 0, buffer.length, 0, (error) => {
             if (error) {
-              reject(error);
+              reject(sftpOperationFailure(error));
               return;
             }
 
             resolve();
           });
         });
-      } finally {
-        closeStarted = true;
-        await new Promise((resolve, reject) => {
-          sftp.close(handle, (error) => {
-            if (error) {
-              reject(error);
-              return;
-            }
+      } catch (error) {
+        writeError = error;
+      }
 
-            resolve();
-          });
-        });
+      // The handle is closed whatever happened. A close failure must not
+      // REPLACE the write's failure: the write is the reason the upload
+      // failed, and it is the reason the user needs. The close is only
+      // reported when the write succeeded.
+      closeStarted = true;
+      const closeError = await new Promise((resolve) => {
+        sftp.close(handle, (error) => resolve(error));
+      }).catch((error) => {
+        // A close that throws outright, rather than reporting a status, is
+        // still a failure — but only when the write succeeded. When the write
+        // already failed, the write's reason is the one that matters.
+        if (!writeError) {
+          throw error;
+        }
+        return undefined;
+      });
+
+      if (writeError) {
+        throw writeError;
+      }
+      if (closeError) {
+        throw sftpOperationFailure(closeError);
       }
 
       return targetPath;
@@ -220,7 +297,7 @@ export function createSftpOperations({ withSftp }) {
         const fileStats = await new Promise((resolve, reject) => {
           sftp.stat(targetPath, (error, stats) => {
             if (error) {
-              reject(error);
+              reject(sftpOperationFailure(error));
               return;
             }
 
@@ -259,6 +336,13 @@ export function createSftpOperations({ withSftp }) {
 
         try {
           await pipeline(readStream, response);
+        } catch (error) {
+          // A read failure is an SFTP status failure like any other (the file
+          // can vanish between the stat and the open), so it is wrapped the
+          // same way. The headers are already committed by this point, so the
+          // client sees the transfer fail rather than the message — the stat
+          // above is what catches the usual "no such file" before that.
+          throw sftpOperationFailure(error);
         } finally {
           readStream.off("open", onProgress);
           readStream.off("data", onProgress);
