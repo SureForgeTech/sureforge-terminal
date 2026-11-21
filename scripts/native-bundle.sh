@@ -7,6 +7,12 @@ TAURI_CONFIG="$ROOT_DIR/src-tauri/tauri.conf.json"
 PRODUCT_NAME="${MACOS_PRODUCT_NAME:-$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).productName" "$TAURI_CONFIG")}"
 APP_VERSION="${MACOS_APP_VERSION:-$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).version" "$TAURI_CONFIG")}"
 APP_IDENTIFIER="${MACOS_APP_IDENTIFIER:-$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).identifier" "$TAURI_CONFIG")}"
+# The updater public key is compiled into the app, and the update feed is
+# signed with its private key. Recording the key the bundle was built with
+# lets the release path refuse a bundle that no longer trusts the key it is
+# signed with — a bundle built before a key rotation would otherwise publish a
+# feed its own installed copies reject.
+UPDATER_PUBKEY="$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).plugins?.updater?.pubkey || ''" "$TAURI_CONFIG")"
 APP_BINARY="terminal-workspace"
 APP_SLUG="terminal-workspace"
 RELEASE_DIR="$ROOT_DIR/src-tauri/target/release"
@@ -207,6 +213,7 @@ export RELEASE_LATEST_MANIFEST_PATH="$LATEST_MANIFEST_PATH"
 export PRODUCT_NAME APP_VERSION APP_IDENTIFIER APP_PATH ZIP_PATH EXECUTABLE_PATH
 export WORKSPACE_ROOT="$ROOT_DIR"
 export BUILD_TIME BUILD_BRANCH BUILD_COMMIT BUILD_DIRTY
+export UPDATER_PUBKEY
 export SIGN_MODE SIGNED_IDENTITY SIGNING_PERFORMED SIGNING_TIMESTAMP_MODE
 export CODESIGN_STATUS SPCTL_STATUS CODESIGN_VERIFY_LOG CODESIGN_DISPLAY_LOG SPCTL_LOG
 export EXECUTABLE_SHA256 ZIP_SHA256

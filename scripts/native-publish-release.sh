@@ -76,6 +76,19 @@ if [[ "$RELEASE_TAG" != "v$VERSION" ]]; then
   exit 1
 fi
 
+# The bundle must trust the updater public key this checkout signs the update
+# feed with. The promoted manifest records the key the bundle was built with,
+# so a bundle built before a key rotation is caught here: the feed would be
+# signed with the new key while the app inside it still trusts the old one,
+# and every installed copy would reject that update — and every update after
+# it — while the release page says the update is available.
+if ! node "$SCRIPT_DIR/verify-updater-key-match.mjs" \
+  --manifest "$PROMOTED_MANIFEST_PATH" \
+  --tauri-conf "$SCRIPT_DIR/../src-tauri/tauri.conf.json"; then
+  echo "ERROR: refusing to publish a bundle that does not trust the updater key this checkout signs with." >&2
+  exit 1
+fi
+
 # #241 / #379: every content gate runs BEFORE the GitHub release exists, so a
 # failure cannot leave an empty or half-populated release behind under the tag.
 # Promotion emits latest.json, a signed .app.tar.gz and its .sig only when the

@@ -19,6 +19,8 @@ const BUILT = "1".repeat(40);
 const OTHER = "2".repeat(40);
 const ANNOTATED = "3".repeat(40);
 const VERSION = "0.2.2";
+const UPDATER_KEY =
+  "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE3QTU5QjAxRjAyMUREM0QKUldROTNTSHdBWnVscDl5MTBQdEhNRVBMcG9MOEp1amdyU3RSVnFtT2hpQkgyaUU4SEpVcXVMcysK";
 
 const FAKE_GH = `#!/usr/bin/env bash
 if [[ "$1" == "release" && "$2" == "view" ]]; then
@@ -34,6 +36,7 @@ if [[ "$1" == "release" && "$2" == "upload" ]]; then
   exit 0
 fi
 if [[ "$1" == "api" ]]; then
+  echo "API $*" >> "$FAKE_LOG"
   case "\${FAKE_TAG_STATE:-present}" in
     missing) echo "gh: Not Found (HTTP 404)" >&2; exit 1;;
     broken) echo "Get https://api.github.com/x: dial tcp: lookup api.github.com: no such host" >&2; exit 1;;
@@ -71,21 +74,32 @@ function fixture(manifest: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "release-tag-commit-"));
   mkdirSync(join(dir, "scripts"), { recursive: true });
   mkdirSync(join(dir, "bin"), { recursive: true });
+  mkdirSync(join(dir, "src-tauri"), { recursive: true });
   mkdirSync(join(dir, "artifacts/release/promoted/stable"), { recursive: true });
   mkdirSync(join(dir, "promotion"), { recursive: true });
 
-  for (const file of ["native-publish-release.sh", "load-env.sh", "verify-release-tag-commit.mjs"]) {
+  for (const file of [
+    "native-publish-release.sh",
+    "load-env.sh",
+    "verify-release-tag-commit.mjs",
+    "verify-updater-key-match.mjs",
+  ]) {
     copyFileSync(join(ROOT, "scripts", file), join(dir, "scripts", file));
   }
   copyFileSync(join(ROOT, ".env.shared"), join(dir, ".env.shared"));
   writeFileSync(join(dir, "bin", "gh"), FAKE_GH, { mode: 0o755 });
   writeFileSync(join(dir, "promotion", `terminal-workspace-macos-v${VERSION}.zip`), "asset\n");
   writeFileSync(
+    join(dir, "src-tauri/tauri.conf.json"),
+    `${JSON.stringify({ version: VERSION, plugins: { updater: { pubkey: UPDATER_KEY } } }, null, 2)}\n`,
+  );
+  writeFileSync(
     join(dir, "artifacts/release/promoted/stable/latest-macos-release.json"),
     `${JSON.stringify(
       {
         version: VERSION,
         commit: BUILT,
+        updater: { pubkey: UPDATER_KEY },
         promotion: { directory: join(dir, "promotion"), releaseNotesPath: "" },
         ...manifest,
       },
@@ -177,6 +191,7 @@ describe("publishing a release keeps the tag and the assets on one commit", () =
     const result = publish(dir, { FAKE_TAG_STATE: "present", FAKE_TAG_COMMIT: OTHER });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(`tag 'v${VERSION}' names commit '${OTHER}'`);
+    expect(result.log).toContain("API");
     expect(result.log).not.toContain("UPLOAD");
     rmSync(dir, { force: true, recursive: true });
   });
@@ -199,6 +214,7 @@ describe("publishing a release keeps the tag and the assets on one commit", () =
     });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(`tag 'v${VERSION}' names commit '${OTHER}'`);
+    expect(result.log).toContain("API");
     expect(result.log).not.toContain("UPLOAD");
     rmSync(dir, { force: true, recursive: true });
   });

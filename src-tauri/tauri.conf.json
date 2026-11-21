@@ -37,7 +37,7 @@
       "preload": ["sqlite:terminalworkspace.db"]
     },
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI5RkNDNzA0OTAxQzA5N0EKUldSNkNSeVFCTWY4dWQxL0x5MkFtYy9tcUU2QnB6QWprUU9nRDdkRHFjdnRXeGZFL05UUHBCMjAK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE3QTU5QjAxRjAyMUREM0QKUldROTNTSHdBWnVscDl5MTBQdEhNRVBMcG9MOEp1amdyU3RSVnFtT2hpQkgyaUU4SEpVcXVMcysK",
       "endpoints": [
         "https://github.com/ABD-Enterprises/terminal-workspace/releases/latest/download/latest.json"
       ]

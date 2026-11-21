@@ -11,6 +11,15 @@ if [[ ! -f "$MANIFEST_PATH" ]]; then
   exit 1
 fi
 
+# The bundle must trust the updater public key this checkout signs the update
+# feed with. The bundle records the key it was built with, so a bundle built
+# before a key rotation is refused here: promoting it would sign a feed with
+# the new key for an app that still trusts the old one, and every installed
+# copy would reject that update — and every update after it.
+node "$ROOT_DIR/scripts/verify-updater-key-match.mjs" \
+  --manifest "$MANIFEST_PATH" \
+  --tauri-conf "$ROOT_DIR/src-tauri/tauri.conf.json"
+
 # Live re-verification of the signed bundle before promotion. The manifest
 # values are checked downstream, but a manifest can be edited or stale; the
 # only authoritative check is running codesign and spctl against the bundle
