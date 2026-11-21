@@ -67,8 +67,10 @@ secret and variable **names** only, never values:
   signing and notarization have already run, so a missing updater secret costs a full release
   attempt rather than failing in the first minute.
 
-Trigger the workflow with `workflow_dispatch` and its `release_tag` input, or by pushing a `v*`
-tag — pushing a release tag is an owner action. With both prerequisites in place the job signs,
+Trigger the workflow with `workflow_dispatch` and its `release_tag` input — the workflow no longer
+starts on a pushed tag, so a `v*` tag on its own releases nothing. The job runs in the protected
+`release-signing` environment, so it waits for the owner's approval before it reads the signing
+secrets. With both prerequisites in place the job signs,
 notarizes, staples, promotes (emitting the signed `.app.tar.gz`, `latest.json` and `.sig`, which
 need `TAURI_SIGNING_PRIVATE_KEY`; both promote and publish run with `REQUIRE_UPDATER_ARTIFACTS=1`
 so a feedless promote fails instead of publishing) and publishes the assets — but the CI job runs
