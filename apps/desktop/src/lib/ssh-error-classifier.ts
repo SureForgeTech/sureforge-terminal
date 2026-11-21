@@ -79,6 +79,23 @@ const RULES: ClassifierRule[] = [
   // Host key mismatch.
   {
     category: "host_key_mismatch",
+    // #475: a DSA (ssh-dss) key is refused outright — it is 1024-bit and
+    // signed with SHA-1. The key did not change: it was refused for being
+    // too weak, and saying "the host key has changed" about it tells the
+    // user to re-scan a key that is fine and to suspect an attack that is
+    // not there. This rule comes first so a refusal never reads as a
+    // mismatch.
+    //
+    // Both runtimes say "DSA (ssh-dss)": the native shell
+    // (src-tauri/src/native_host_keys.rs) and the browser backend
+    // (apps/desktop/server/backend-host-keys.mjs).
+    match: /DSA \(ssh-dss\)/i,
+    message: "The host key is too weak to trust.",
+    hint:
+      "The server offered a DSA (ssh-dss) host key, which this app refuses. Ask the server's administrator to add an Ed25519 or ECDSA host key.",
+  },
+  {
+    category: "host_key_mismatch",
     // OpenSSH (native app) prints "REMOTE HOST IDENTIFICATION HAS CHANGED".
     match: /(?:Host key verification failed|server presented a different host key|host key.*does not match|REMOTE HOST IDENTIFICATION HAS CHANGED)/i,
     message: "Host key has changed.",

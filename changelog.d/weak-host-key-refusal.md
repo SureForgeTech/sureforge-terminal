@@ -1,0 +1,1 @@
+- [FIX] A host key refused for being too weak now says so, instead of reading as a changed key.
