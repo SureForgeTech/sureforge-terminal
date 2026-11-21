@@ -8,6 +8,7 @@ CHANNEL="${MACOS_RELEASE_CHANNEL:-stable}"
 PROMOTED_MANIFEST_PATH="$ROOT_DIR/artifacts/release/promoted/$CHANNEL/latest-macos-release.json"
 DRY_RUN="${RELEASE_DRY_RUN:-0}"
 RELEASE_TARGET="${RELEASE_TARGET:-}"
+SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
 
 if [[ ! -f "$PROMOTED_MANIFEST_PATH" ]]; then
   echo "Promoted release manifest not found at $PROMOTED_MANIFEST_PATH" >&2
@@ -44,6 +45,7 @@ console.log(releaseName);
 console.log(promotionDirectory);
 console.log(releaseNotesPath);
 console.log(JSON.stringify(assetPaths));
+console.log(manifest.commit || "");
 NODE
 )
 
@@ -53,6 +55,10 @@ RELEASE_NAME="${PUBLISH_INFO[2]}"
 PROMOTION_DIRECTORY="${PUBLISH_INFO[3]}"
 RELEASE_NOTES_PATH="${PUBLISH_INFO[4]}"
 ASSET_PATHS_JSON="${PUBLISH_INFO[5]}"
+# The commit the promoted bundle was built from. The release tag must name
+# this commit: the tag trigger the workflow used to have made that true by
+# construction, and the dispatch path does not.
+BUILT_COMMIT="${PUBLISH_INFO[6]}"
 
 mapfile -t ASSET_PATHS < <(ASSET_PATHS_JSON="$ASSET_PATHS_JSON" node <<'NODE'
 const assets = JSON.parse(process.env.ASSET_PATHS_JSON);
@@ -80,7 +86,6 @@ fi
 # output staged from elsewhere, so publish is the last point where the release
 # contents are known.
 if [[ "${REQUIRE_UPDATER_ARTIFACTS:-0}" == "1" ]]; then
-  SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
   bash "$SCRIPT_DIR/verify-updater-artifacts.sh" "${ASSET_PATHS[@]}"
   UPDATER_TARBALL=""
   for asset in "${ASSET_PATHS[@]}"; do
@@ -121,16 +126,62 @@ fi
 
 : "${GITHUB_REPOSITORY:?Set GITHUB_REPOSITORY before publishing a release.}"
 
-if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+# The tag must name the commit the assets were built from. A GitHub Release
+# can be created for a tag that already exists, and then `target_commitish` is
+# ignored, so the tag would keep its own commit while the assets come from
+# another: the tag is resolved BEFORE the release is created or its assets
+# replaced. RELEASE_TARGET is the commit the workflow built; the promoted
+# manifest records the commit the bundle was built from, and the two must
+# agree.
+if [[ -n "$RELEASE_TARGET" && -n "$BUILT_COMMIT" && "$RELEASE_TARGET" != "$BUILT_COMMIT" ]]; then
+  echo "ERROR: RELEASE_TARGET '$RELEASE_TARGET' is not the commit the assets were built from ('$BUILT_COMMIT')." >&2
+  exit 1
+fi
+
+TAG_STATUS=0
+TAG_COMMIT="$(node "$SCRIPT_DIR/verify-release-tag-commit.mjs" \
+  --resolve --tag "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY")" || TAG_STATUS=$?
+
+case "$TAG_STATUS" in
+  0)
+    if [[ -z "$BUILT_COMMIT" ]]; then
+      echo "ERROR: the promoted manifest names no build commit, so the tag '$RELEASE_TAG' cannot be checked against it." >&2
+      exit 1
+    fi
+    if [[ "$TAG_COMMIT" != "$BUILT_COMMIT" ]]; then
+      echo "ERROR: tag '$RELEASE_TAG' names commit '$TAG_COMMIT', but the assets were built from '$BUILT_COMMIT'." >&2
+      echo "       Refusing to publish assets that do not match the tag." >&2
+      exit 1
+    fi
+    ;;
+  3)
+    # No tag yet: it is created below, at the commit the assets were built from.
+    ;;
+  *)
+    echo "ERROR: could not resolve the release tag '$RELEASE_TAG'; refusing to publish." >&2
+    exit 1
+    ;;
+esac
+
+RELEASE_EXISTS=0
+if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+  RELEASE_EXISTS=1
+fi
+
+if [[ "$RELEASE_EXISTS" == "0" ]]; then
   create_args=(
     gh release create "$RELEASE_TAG"
     --repo "$GITHUB_REPOSITORY"
     --title "$RELEASE_NAME"
   )
 
-  if [[ -n "$RELEASE_TARGET" ]]; then
-    create_args+=(--target "$RELEASE_TARGET")
+  # The tag is created at the commit the assets were built from, so the
+  # release and its assets cannot name different commits.
+  if [[ -z "$BUILT_COMMIT" ]]; then
+    echo "ERROR: cannot determine the commit that was built; refusing to create a release whose tag would not name it." >&2
+    exit 1
   fi
+  create_args+=(--target "$BUILT_COMMIT")
 
   if [[ "$CHANNEL" != "stable" ]]; then
     create_args+=(--prerelease)

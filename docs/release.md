@@ -51,7 +51,11 @@ secret and variable **names** only, never values:
   register a runner with labels of your own and point the repository variable at them as a JSON
   array. The job must never run on the shared self-hosted pool (that pool executes pull-request
   code) or on a GitHub-hosted runner.
-- **Secrets.** Registered as of 2026-10-26: `TAURI_SIGNING_PRIVATE_KEY` and
+- **Secrets.** The job resolves every `secrets.*` name through the protected `release-signing`
+  environment, so add the names the job reads — the `TAURI_SIGNING_*` pair included — to that
+  environment before removing the repository-level copies; a name that is in neither place stops
+  the run before the updater feed is signed.
+  Registered as of 2026-10-26: `TAURI_SIGNING_PRIVATE_KEY` and
   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Not registered: all ten `MACOS_*` names in the
   `CI release workflow secrets` list under "Required Environment" — they are what stops a run
   first. The `Validate release secrets` step (`npm run release:secrets:validate-env`) is passed
@@ -67,8 +71,10 @@ secret and variable **names** only, never values:
   signing and notarization have already run, so a missing updater secret costs a full release
   attempt rather than failing in the first minute.
 
-Trigger the workflow with `workflow_dispatch` and its `release_tag` input, or by pushing a `v*`
-tag — pushing a release tag is an owner action. With both prerequisites in place the job signs,
+Trigger the workflow with `workflow_dispatch` and its `release_tag` input — the workflow no longer
+starts on a pushed tag, so a `v*` tag on its own releases nothing. The job runs in the protected
+`release-signing` environment, so it waits for the owner's approval before it reads the signing
+secrets. With both prerequisites in place the job signs,
 notarizes, staples, promotes (emitting the signed `.app.tar.gz`, `latest.json` and `.sig`, which
 need `TAURI_SIGNING_PRIVATE_KEY`; both promote and publish run with `REQUIRE_UPDATER_ARTIFACTS=1`
 so a feedless promote fails instead of publishing) and publishes the assets — but the CI job runs
