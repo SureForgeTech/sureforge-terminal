@@ -8,7 +8,8 @@
 // the assets come from another. This resolves the tag to a commit so the
 // publish step can refuse that instead of trusting the caller.
 import { execFileSync } from "node:child_process";
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 // The exit code that says "this tag does not exist", as opposed to "the
 // lookup failed": the publish step creates the tag when it is absent, and
@@ -112,9 +113,22 @@ function main() {
   }
 }
 
-// `pathToFileURL` encodes the path, so a checkout under a directory whose
-// name holds a `#` or a `?` still matches: a hand-built `file://` URL would
-// not, and the guard would then exit successfully without having run.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Whether this file is the program that was started. The comparison is on
+// the real paths, so a script reached through a symlink, or through
+// /proc/self/cwd, still matches: a URL comparison would not, and the guard
+// would then exit successfully without having run — which is a silent pass
+// for the release path this guard stands in.
+function startedAsTheProgram() {
+  if (!process.argv[1]) {
+    return false;
+  }
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (startedAsTheProgram()) {
   main();
 }
