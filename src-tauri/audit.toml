@@ -44,3 +44,9 @@ ignore = [
 # "unmaintained". Those are Linux-only deps Tauri links for its Linux target;
 # this app ships macOS-only, so they are not used at runtime. They are
 # informational warnings (non-failing) and are left visible intentionally.
+#
+# Scorecard also reports chrono, glib, proc-macro-error, zbus_names, zvariant,
+# and zvariant_derive from this lockfile. Chrono remains an optional serde_with
+# dependency after replacing the app's direct dependency. The other five enter
+# through non-macOS dependencies. The audit checks that none enters the normal
+# or build dependency graph of either shipped macOS target.

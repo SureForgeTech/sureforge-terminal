@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
+use time::{format_description::well_known::Rfc3339, Date, Month, OffsetDateTime};
 
 /// Reject any private-key path the renderer hands us that escapes the user's
 /// home directory (or the small set of test/system roots we explicitly allow).
@@ -1201,45 +1202,54 @@ pub(crate) fn symbolic_permissions_to_octal(value: &str) -> Option<String> {
     Some(digits)
 }
 
+fn format_utc_timestamp(timestamp: OffsetDateTime) -> Result<String, time::error::Format> {
+    let mut formatted = timestamp.format(&Rfc3339)?;
+    if formatted.ends_with('Z') {
+        formatted.pop();
+        formatted.push_str("+00:00");
+    }
+    Ok(formatted)
+}
+
 pub(crate) fn parse_sftp_modified_at(month: &str, day: &str, time_or_year: &str) -> Option<String> {
     let month = match month {
-        "Jan" => 1,
-        "Feb" => 2,
-        "Mar" => 3,
-        "Apr" => 4,
-        "May" => 5,
-        "Jun" => 6,
-        "Jul" => 7,
-        "Aug" => 8,
-        "Sep" => 9,
-        "Oct" => 10,
-        "Nov" => 11,
-        "Dec" => 12,
+        "Jan" => Month::January,
+        "Feb" => Month::February,
+        "Mar" => Month::March,
+        "Apr" => Month::April,
+        "May" => Month::May,
+        "Jun" => Month::June,
+        "Jul" => Month::July,
+        "Aug" => Month::August,
+        "Sep" => Month::September,
+        "Oct" => Month::October,
+        "Nov" => Month::November,
+        "Dec" => Month::December,
         _ => return None,
     };
-    let day = day.parse::<u32>().ok()?;
+    let day = day.parse::<u8>().ok()?;
 
     if let Some((hour, minute)) = time_or_year.split_once(':') {
-        let hour = hour.parse::<u32>().ok()?;
-        let minute = minute.parse::<u32>().ok()?;
-        let now = Utc::now();
-        let mut timestamp = Utc
-            .with_ymd_and_hms(now.year(), month, day, hour, minute, 0)
-            .single()?;
-        if timestamp > now + chrono::Duration::days(1) {
-            timestamp = Utc
-                .with_ymd_and_hms(now.year() - 1, month, day, hour, minute, 0)
-                .single()?;
+        let hour = hour.parse::<u8>().ok()?;
+        let minute = minute.parse::<u8>().ok()?;
+        let now = OffsetDateTime::now_utc();
+        let timestamp_for_year = |year| {
+            Date::from_calendar_date(year, month, day)
+                .ok()?
+                .with_hms(hour, minute, 0)
+                .ok()
+                .map(|datetime| datetime.assume_utc())
+        };
+        let mut timestamp = timestamp_for_year(now.year())?;
+        if timestamp > now + time::Duration::days(1) {
+            timestamp = timestamp_for_year(now.year() - 1)?;
         }
-        return Some(timestamp.to_rfc3339());
+        return format_utc_timestamp(timestamp).ok();
     }
 
     let year = time_or_year.parse::<i32>().ok()?;
-    let date = NaiveDate::from_ymd_opt(year, month, day)?;
-    Some(
-        Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0)?)
-            .to_rfc3339(),
-    )
+    let date = Date::from_calendar_date(year, month, day).ok()?;
+    format_utc_timestamp(date.midnight().assume_utc()).ok()
 }
 
 pub(crate) fn parse_sftp_directory_listing(
@@ -2184,6 +2194,8 @@ pub(crate) fn create_native_forward(
     validate_forward_payload(&request)?;
     let session = get_native_session(native_sessions, &request.session_id)
         .ok_or_else(|| "Session not found".to_string())?;
+    let created_at = format_utc_timestamp(OffsetDateTime::now_utc())
+        .map_err(|error| format!("Could not format the forward creation time: {error}"))?;
     let forward_id = next_native_forward_id();
     let (context, mut child, master) = open_native_ssh_control_session(&session.host, &forward_id)?;
     let forward_flag = if request.direction == "remote" {
@@ -2233,7 +2245,7 @@ pub(crate) fn create_native_forward(
     };
 
     let record = PortForwardRecord {
-        created_at: Utc::now().to_rfc3339(),
+        created_at,
         direction: request.direction.clone(),
         id: forward_id.clone(),
         local_host: request.local_host.clone(),

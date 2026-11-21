@@ -45,20 +45,21 @@ if [[ "$CONFIG_IDS" != "$CLI_IDS" ]]; then
   exit 1
 fi
 
-# These exceptions are valid only while the packages stay outside the app's
-# normal/build dependency graph. Check the graph on every audit rather than
-# relying on a past cargo-tree observation in audit.toml. A failed graph read
-# is not evidence of absence, and must not let the ignored audit proceed.
-for package in rsa rkyv; do
-  if ! dependency_tree="$(cargo tree --locked --edges normal,build --invert "$package" --prefix none)"; then
-    echo "[native-audit] Could not verify the unused-package exception for $package." >&2
+# Scorecard can see optional and non-macOS packages in Cargo.lock. The audit
+# exceptions and advisory triage are valid only while these crates stay outside
+# the normal/build graph for both shipped targets.
+LOCKFILE_ONLY_PACKAGES=(chrono glib proc-macro-error rkyv rsa zbus_names zvariant zvariant_derive)
+for target in aarch64-apple-darwin x86_64-apple-darwin; do
+  if ! dependency_tree="$(cargo tree --locked --edges normal,build --target "$target" --prefix none --format '{p}')"; then
+    echo "[native-audit] Could not verify the dependency graph for $target." >&2
     exit 1
   fi
-  if [[ -n "$dependency_tree" ]]; then
-    echo "[native-audit] $package is now in the app's dependency graph; its advisory exception is no longer valid." >&2
-    echo "[native-audit] Upgrade the affected dependency and remove the exception before continuing." >&2
-    exit 1
-  fi
+  for package in "${LOCKFILE_ONLY_PACKAGES[@]}"; do
+    if grep -qE "^${package} v" <<<"$dependency_tree"; then
+      echo "[native-audit] $package is in the $target dependency graph. Re-evaluate its advisory before continuing." >&2
+      exit 1
+    fi
+  done
 done
 
 IGNORE_ARGS=()

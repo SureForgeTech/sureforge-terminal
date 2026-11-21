@@ -1,0 +1,1 @@
+- [SECURITY] Replace the unmaintained Chrono dependency in the native timestamp code.

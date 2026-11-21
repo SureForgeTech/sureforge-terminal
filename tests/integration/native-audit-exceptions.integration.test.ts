@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 
-function runAudit(scenario: string, auditStatus = 0) {
+function runAudit(scenario: string, auditStatus = 0, activeTarget = "") {
   const root = mkdtempSync(join(tmpdir(), "tw-audit-exceptions-"));
   const bin = join(root, "bin");
   const callsPath = join(root, "calls");
@@ -19,13 +19,14 @@ printf '%s\\n' "$*" >> "$AUDIT_TEST_CALLS"
 if [ "$1" = audit ]; then exit "$AUDIT_TEST_STATUS"; fi
 if [ "$1" != tree ]; then exit 90; fi
 if [ "$AUDIT_TEST_SCENARIO" = graph-failure ]; then exit 42; fi
-package=
+target=
 while [ "$#" -gt 0 ]; do
-  if [ "$1" = --invert ]; then shift; package="$1"; fi
+  if [ "$1" = --target ]; then shift; target="$1"; fi
   shift
 done
-if [ "$AUDIT_TEST_SCENARIO" = "$package-active" ]; then
-  printf '%s v0.1.0\\nterminal-workspace v0.2.1\\n' "$package"
+printf 'terminal-workspace v0.2.1\\n'
+if [ "$AUDIT_TEST_TARGET" = "$target" ]; then
+  printf '%s v0.1.0\\n' "$AUDIT_TEST_SCENARIO"
 fi
 exit 0
 `, { mode: 0o755 });
@@ -36,6 +37,7 @@ exit 0
         AUDIT_TEST_CALLS: callsPath,
         AUDIT_TEST_SCENARIO: scenario,
         AUDIT_TEST_STATUS: String(auditStatus),
+        AUDIT_TEST_TARGET: activeTarget,
       },
       encoding: "utf8",
       timeout: 20_000,
@@ -46,20 +48,24 @@ exit 0
   }
 }
 
-it("applies exceptions only after both packages are confirmed absent", () => {
+it("applies exceptions only after checking both macOS dependency graphs", () => {
   const result = runAudit("absent");
   expect(result.status).toBe(0);
   expect(result.calls).toEqual([
-    "tree --locked --edges normal,build --invert rsa --prefix none",
-    "tree --locked --edges normal,build --invert rkyv --prefix none",
+    "tree --locked --edges normal,build --target aarch64-apple-darwin --prefix none --format {p}",
+    "tree --locked --edges normal,build --target x86_64-apple-darwin --prefix none --format {p}",
     "audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0235",
   ]);
 }, 30_000);
 
-it.each(["rsa", "rkyv"])("refuses the %s exception when that package enters the build", (name) => {
-  const result = runAudit(`${name}-active`);
+it.each([
+  ["rsa", "aarch64-apple-darwin"],
+  ["rkyv", "x86_64-apple-darwin"],
+  ["chrono", "x86_64-apple-darwin"],
+])("refuses to audit when %s enters the %s build", (name, target) => {
+  const result = runAudit(name, 0, target);
   expect(result.status).toBe(1);
-  expect(result.stderr).toContain(`${name} is now in the app's dependency graph`);
+  expect(result.stderr).toContain(`${name} is in the ${target} dependency graph`);
   expect(result.calls.some((call) => call.startsWith("audit "))).toBe(false);
 }, 30_000);
 
