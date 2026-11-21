@@ -3,21 +3,32 @@
 // The workflow used to start on a pushed `v*` tag, which made that binding
 // true by construction: the tag named the commit the job built and published.
 // The dispatch path takes the tag as free text, so nothing enforces it — and
-// a re-publish of an existing version would `gh release upload --clobber` the
-// assets of a release whose tag still points at an older commit. This
-// resolves the tag to a commit and refuses the mismatch instead of trusting
-// the caller.
+// a GitHub Release can be created for a tag that already exists, in which
+// case `target_commitish` is ignored and the tag keeps its own commit while
+// the assets come from another. This resolves the tag to a commit so the
+// publish step can refuse that instead of trusting the caller.
 import { execFileSync } from "node:child_process";
 import path from "node:path";
+
+// The exit code that says "this tag does not exist", as opposed to "the
+// lookup failed": the publish step creates the tag when it is absent, and
+// must refuse when it cannot tell.
+export const TAG_MISSING_EXIT = 3;
 
 function runGh(args) {
   return execFileSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 }
 
-// Resolve a tag to the commit it names. A lightweight tag points straight at
-// a commit; an annotated tag points at a tag object, which is dereferenced to
-// the commit it wraps. A tag that does not exist (or a lookup that fails)
-// resolves to null: the caller decides whether that is fatal.
+function isNotFound(error) {
+  const stderr = String(error?.stderr ?? "");
+  const message = String(error?.message ?? "");
+  return /HTTP 404|Not Found/i.test(`${stderr}\n${message}`);
+}
+
+// Resolve a tag to the commit it names, or null when the tag does not exist.
+// A lookup that failed for any other reason (network, authentication, an API
+// error) throws: "cannot tell" is not "no tag", and treating it as "no tag"
+// would let the publish step create a release under a tag it never checked.
 export function resolveTagCommit(tag, repository, gh = runGh) {
   let reference;
   try {
@@ -27,61 +38,51 @@ export function resolveTagCommit(tag, repository, gh = runGh) {
       "--jq",
       ".object | [.sha, .type] | @tsv",
     ]);
-  } catch {
-    return null;
+  } catch (error) {
+    if (isNotFound(error)) {
+      return null;
+    }
+    throw error;
   }
 
   const [sha, type] = String(reference).trim().split("\t");
   if (!sha) {
-    return null;
+    throw new Error(`The tag '${tag}' resolved to no object.`);
   }
   if (type !== "tag") {
     return sha;
   }
 
+  // An annotated tag points at a tag object, which wraps the commit.
   let annotated;
   try {
     annotated = gh(["api", `repos/${repository}/git/tags/${sha}`, "--jq", ".object.sha"]);
-  } catch {
-    return null;
-  }
-  return String(annotated).trim() || null;
-}
-
-export function assertTagMatchesBuild({ tag, builtCommit, repository, gh = runGh }) {
-  if (!builtCommit) {
+  } catch (error) {
     throw new Error(
-      `Cannot verify the release tag '${tag}': the promoted manifest names no build commit.`,
+      `The annotated tag '${tag}' did not resolve to a commit: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
     );
   }
 
-  const tagCommit = resolveTagCommit(tag, repository, gh);
-  if (!tagCommit) {
-    throw new Error(`Cannot verify the release tag '${tag}': it did not resolve to a commit.`);
+  const commit = String(annotated).trim();
+  if (!commit) {
+    throw new Error(`The annotated tag '${tag}' resolved to no commit.`);
   }
-
-  if (tagCommit !== builtCommit) {
-    throw new Error(
-      `Tag '${tag}' names commit ${tagCommit}, but the published assets were built from ${builtCommit}.`,
-    );
-  }
-
-  return { tag, tagCommit, builtCommit };
+  return commit;
 }
 
 function parseArgs(argv) {
-  const options = { tag: "", commit: "", repo: "" };
+  const options = { tag: "", repo: "", resolve: false };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--tag") {
       options.tag = argv[index + 1] ?? "";
       index += 1;
-    } else if (argument === "--commit") {
-      options.commit = argv[index + 1] ?? "";
-      index += 1;
     } else if (argument === "--repo") {
       options.repo = argv[index + 1] ?? "";
       index += 1;
+    } else if (argument === "--resolve") {
+      options.resolve = true;
     } else {
       throw new Error(`Unknown argument: ${argument}`);
     }
@@ -92,17 +93,19 @@ function parseArgs(argv) {
 function main() {
   try {
     const options = parseArgs(process.argv.slice(2));
-    if (!options.tag || !options.commit || !options.repo) {
+    if (!options.tag || !options.repo) {
       throw new Error(
-        "Usage: node verify-release-tag-commit.mjs --tag <tag> --commit <sha> --repo <owner/name>",
+        "Usage: node verify-release-tag-commit.mjs --tag <tag> --repo <owner/name> [--resolve]",
       );
     }
-    const result = assertTagMatchesBuild({
-      tag: options.tag,
-      builtCommit: options.commit,
-      repository: options.repo,
-    });
-    console.log(`Release tag '${result.tag}' names the built commit ${result.builtCommit}.`);
+
+    const commit = resolveTagCommit(options.tag, options.repo);
+    if (!commit) {
+      console.error(`The tag '${options.tag}' does not exist.`);
+      process.exitCode = TAG_MISSING_EXIT;
+      return;
+    }
+    console.log(commit);
   } catch (error) {
     console.error(`ERROR: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;

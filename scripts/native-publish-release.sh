@@ -126,22 +126,46 @@ fi
 
 : "${GITHUB_REPOSITORY:?Set GITHUB_REPOSITORY before publishing a release.}"
 
+# The tag must name the commit the assets were built from. A GitHub Release
+# can be created for a tag that already exists, and then `target_commitish` is
+# ignored, so the tag would keep its own commit while the assets come from
+# another: the tag is resolved BEFORE the release is created or its assets
+# replaced. RELEASE_TARGET is the commit the workflow built; the promoted
+# manifest records the commit the bundle was built from, and the two must
+# agree.
+if [[ -n "$RELEASE_TARGET" && -n "$BUILT_COMMIT" && "$RELEASE_TARGET" != "$BUILT_COMMIT" ]]; then
+  echo "ERROR: RELEASE_TARGET '$RELEASE_TARGET' is not the commit the assets were built from ('$BUILT_COMMIT')." >&2
+  exit 1
+fi
+
+TAG_STATUS=0
+TAG_COMMIT="$(node "$SCRIPT_DIR/verify-release-tag-commit.mjs" \
+  --resolve --tag "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY")" || TAG_STATUS=$?
+
+case "$TAG_STATUS" in
+  0)
+    if [[ -z "$BUILT_COMMIT" ]]; then
+      echo "ERROR: the promoted manifest names no build commit, so the tag '$RELEASE_TAG' cannot be checked against it." >&2
+      exit 1
+    fi
+    if [[ "$TAG_COMMIT" != "$BUILT_COMMIT" ]]; then
+      echo "ERROR: tag '$RELEASE_TAG' names commit '$TAG_COMMIT', but the assets were built from '$BUILT_COMMIT'." >&2
+      echo "       Refusing to publish assets that do not match the tag." >&2
+      exit 1
+    fi
+    ;;
+  3)
+    # No tag yet: it is created below, at the commit the assets were built from.
+    ;;
+  *)
+    echo "ERROR: could not resolve the release tag '$RELEASE_TAG'; refusing to publish." >&2
+    exit 1
+    ;;
+esac
+
 RELEASE_EXISTS=0
 if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
   RELEASE_EXISTS=1
-fi
-
-if [[ "$RELEASE_EXISTS" == "1" ]]; then
-  # The release exists, so the tag does too, and it may name an older commit:
-  # `gh release upload --clobber` would replace the assets under a tag that
-  # points somewhere else. The tag trigger this workflow used to have made
-  # that binding hold by construction; the dispatch path does not, so it is
-  # proved here instead of trusted.
-  if ! node "$SCRIPT_DIR/verify-release-tag-commit.mjs" \
-    --tag "$RELEASE_TAG" --commit "$BUILT_COMMIT" --repo "$GITHUB_REPOSITORY"; then
-    echo "ERROR: refusing to replace the assets of the existing release '$RELEASE_TAG'." >&2
-    exit 1
-  fi
 fi
 
 if [[ "$RELEASE_EXISTS" == "0" ]]; then
@@ -151,17 +175,13 @@ if [[ "$RELEASE_EXISTS" == "0" ]]; then
     --title "$RELEASE_NAME"
   )
 
-  # The tag must name the commit the assets were built from. The workflow
-  # dispatches with RELEASE_TARGET set to the commit it built; a local publish
-  # has no dispatch target, so the bundle's own build commit is used.
-  if [[ -n "$RELEASE_TARGET" ]]; then
-    create_args+=(--target "$RELEASE_TARGET")
-  elif [[ -n "$BUILT_COMMIT" ]]; then
-    create_args+=(--target "$BUILT_COMMIT")
-  else
+  # The tag is created at the commit the assets were built from, so the
+  # release and its assets cannot name different commits.
+  if [[ -z "$BUILT_COMMIT" ]]; then
     echo "ERROR: cannot determine the commit that was built; refusing to create a release whose tag would not name it." >&2
     exit 1
   fi
+  create_args+=(--target "$BUILT_COMMIT")
 
   if [[ "$CHANNEL" != "stable" ]]; then
     create_args+=(--prerelease)
