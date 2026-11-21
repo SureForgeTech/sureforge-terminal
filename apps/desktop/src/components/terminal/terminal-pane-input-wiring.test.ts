@@ -50,6 +50,7 @@ describe("attachTerminalPaneInputWiring", () => {
     const transportRef = ref<"ssh" | "mock">("ssh");
 
     attachTerminalPaneInputWiring({
+      paneId: "pane-1",
       commandBufferRef,
       connectionStateRef,
       container,
@@ -92,6 +93,7 @@ describe("attachTerminalPaneInputWiring", () => {
     const { terminal } = createTerminal();
 
     attachTerminalPaneInputWiring({
+      paneId: "pane-1",
       commandBufferRef: ref(""),
       connectionStateRef: ref<"connected" | "disconnected">("connected"),
       container,

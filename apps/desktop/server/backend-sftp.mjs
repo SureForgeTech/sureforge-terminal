@@ -2,6 +2,10 @@ import {
   SFTP_CONTROL_TIMEOUT_MS,
   withDeadline as defaultWithDeadline,
 } from "./backend-deadline.mjs";
+import {
+  isSftpSubsystemUnavailable,
+  sftpSubsystemUnavailableFailure,
+} from "./backend-sftp-failure.mjs";
 
 export function createWithSftp({
   connectClient,
@@ -48,7 +52,14 @@ export function createWithSftp({
         const sftp = await new Promise((resolve, reject) => {
           client.sftp((error, sftpHandle) => {
             if (error) {
-              reject(error);
+              // A server that does not offer the SFTP subsystem fails the
+              // request with its own wording; the client is told that the
+              // subsystem is missing instead of "Internal server error.".
+              reject(
+                isSftpSubsystemUnavailable(error)
+                  ? sftpSubsystemUnavailableFailure(error)
+                  : error
+              );
               return;
             }
 

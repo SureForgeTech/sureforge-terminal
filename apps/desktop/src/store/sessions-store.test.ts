@@ -2,13 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sampleHosts } from "../types/host";
 import { formatSessionConnectionState, type SessionPane, type SessionWorkspaceState } from "../types/session";
 
-vi.mock("../lib/backend-runtime", () => ({
+// The backend runtime is only partly mocked: the app store asks it whether
+// the Tauri runtime is present.
+vi.mock("../lib/backend-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/backend-runtime")>()),
   closeSession: vi.fn(() => Promise.resolve({ ok: true })),
 }));
 import { closeSession } from "../lib/backend-runtime";
 
 import {
-  appendPaneCommandHistoryOutput,
+  setPaneCommandHistoryOutput,
   closeBackendSessionsForPanes,
   cycleSessionTab,
   closeSessionTab,
@@ -245,7 +248,7 @@ describe("sessions store helpers", () => {
     );
     const entryId = recorded.commandHistory[0]!.id;
 
-    const updated = appendPaneCommandHistoryOutput(
+    const updated = setPaneCommandHistoryOutput(
       recorded,
       entryId,
       "\u001b[32mload average: 1.00\r\nusers: 2\u001b[0m"
@@ -273,7 +276,7 @@ describe("sessions store helpers", () => {
       "queued"
     );
     const entryId = recorded.commandHistory[0]!.id;
-    const updated = appendPaneCommandHistoryOutput(recorded, entryId, "load average: 1.00");
+    const updated = setPaneCommandHistoryOutput(recorded, entryId, "load average: 1.00");
     const optedOut = updatePanePreviewPersistence(updated, paneId, false);
     const persisted = sanitizePersistedCommandHistory(optedOut.commandHistory, optedOut.panes);
 
@@ -305,7 +308,7 @@ describe("sessions store helpers", () => {
       "queued"
     );
     const entryId = recorded.commandHistory[0]!.id;
-    const updated = appendPaneCommandHistoryOutput(recorded, entryId, "load average: 1.00");
+    const updated = setPaneCommandHistoryOutput(recorded, entryId, "load average: 1.00");
     const optedOut = updatePanePreviewPersistence(updated, paneId, false);
     const closed = closeSessionTab(optedOut, tabId);
     const persisted = sanitizePersistedCommandHistory(
@@ -339,7 +342,7 @@ describe("sessions store helpers", () => {
       "queued"
     );
     const entryId = recorded.commandHistory[0]!.id;
-    const updated = appendPaneCommandHistoryOutput(recorded, entryId, "load average: 1.00");
+    const updated = setPaneCommandHistoryOutput(recorded, entryId, "load average: 1.00");
     const closed = closeSessionTab(updated, tabId);
     const persisted = sanitizePersistedCommandHistory(updated.commandHistory, closed.panes);
 

@@ -12,6 +12,7 @@ import { useSessionsStore } from "../store/sessions-store";
 import {
   reportConnectError,
   useConnectErrorStore,
+  type ConnectErrorAction,
   type ConnectErrorTone,
 } from "../store/connect-error-store";
 import type { HostRecord } from "../types/host";
@@ -91,10 +92,24 @@ export async function launchHostSession(host: HostRecord): Promise<LaunchHostSes
  * The call sites still log to the console for debugging; they no longer have
  * to duplicate the user-facing message.
  */
-function reportFailure(message: string, tone: ConnectErrorTone = "error") {
+function reportFailure(
+  message: string,
+  tone: ConnectErrorTone = "error",
+  action: ConnectErrorAction | null = null
+) {
   // `reportConnectError` is the store's reporting entry point: it ignores an
   // empty message, so a blank banner can never be published.
-  reportConnectError(message, tone);
+  reportConnectError(message, tone, action);
+}
+
+/**
+ * The action for a failure the user can only fix on the host.
+ *
+ * The hosts page opens a host's editor with `?edit=<id>`, so the banner can
+ * take the user straight to the thing that has to change.
+ */
+function openHostAction(host: HostRecord): ConnectErrorAction {
+  return { label: "Open host", href: `/hosts?edit=${encodeURIComponent(host.id)}` };
 }
 
 async function launchHostSessionInner(host: HostRecord): Promise<LaunchHostSessionResult> {
@@ -125,17 +140,17 @@ async function launchHostSessionInner(host: HostRecord): Promise<LaunchHostSessi
     }
     if (trustResult.reason === "scan-failed") {
       const message = `Could not scan ${host.hostname}:${host.port}. Check that the host is reachable and try again.`;
-      reportFailure(message);
+      reportFailure(message, "error", openHostAction(host));
       return { ok: false, reason: "scan-failed", errorMessage: message };
     }
     if (trustResult.reason === "scan-empty") {
       const message = `${host.hostname}:${host.port} returned no host keys to trust.`;
-      reportFailure(message);
+      reportFailure(message, "error", openHostAction(host));
       return { ok: false, reason: "scan-empty", errorMessage: message };
     }
     if (trustResult.reason === "user-non-interactive") {
       const message = `Could not prompt for the host key of ${host.label}. Open the host from the Hosts page to approve it.`;
-      reportFailure(message);
+      reportFailure(message, "error", openHostAction(host));
       return { ok: false, reason: "user-non-interactive", errorMessage: message };
     }
     // Other reasons (policy-allows-unknown, etc.) shouldn't surface as

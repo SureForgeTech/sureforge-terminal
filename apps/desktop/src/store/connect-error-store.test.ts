@@ -1,35 +1,46 @@
-import { describe, expect, it, beforeEach } from "vitest";
-import { reportConnectError, useConnectErrorStore } from "./connect-error-store";
+import { beforeEach, describe, expect, it } from "vitest";
 
-// The connect-failure channel exists because every connect failure used to
-// be computed correctly and then dropped into a console.warn at each call
-// site, so a host that was down, firewalled, or mis-typed produced no
-// on-screen output at all. These tests pin the reporting contract.
+import {
+  reportConnectError,
+  useConnectErrorStore,
+} from "./connect-error-store";
 
-describe("connect-error-store", () => {
+// A connect failure the user has to act on should say what to do about it,
+// not only what went wrong. The action is declarative — a route to go to — so
+// the store holds no callbacks and the banner owns the navigation.
+
+describe("the connect error banner", () => {
   beforeEach(() => {
     useConnectErrorStore.getState().clearConnectError();
   });
 
-  it("starts with no message", () => {
-    expect(useConnectErrorStore.getState().message).toBeNull();
-    expect(useConnectErrorStore.getState().tone).toBe("error");
+  it("carries a message and no action by default", () => {
+    reportConnectError("Could not reach the host.");
+
+    const state = useConnectErrorStore.getState();
+    expect(state.message).toBe("Could not reach the host.");
+    expect(state.tone).toBe("error");
+    expect(state.action).toBeNull();
   });
 
-  it("reports a message with the error tone by default", () => {
-    reportConnectError("Could not scan host:22.");
+  it("carries the action that fixes the failure", () => {
+    reportConnectError("The host key could not be approved.", "error", {
+      label: "Open host",
+      href: "/hosts?edit=host-1",
+    });
 
-    expect(useConnectErrorStore.getState().message).toBe("Could not scan host:22.");
-    expect(useConnectErrorStore.getState().tone).toBe("error");
+    const state = useConnectErrorStore.getState();
+    expect(state.action?.label).toBe("Open host");
+    expect(state.action?.href).toBe("/hosts?edit=host-1");
   });
 
-  it("reports a user-initiated failure as a warning", () => {
-    reportConnectError("Connection cancelled — host key was not trusted.", "warning");
+  it("reports a failure the user chose as a warning", () => {
+    reportConnectError("Connection cancelled.", "warning");
 
     expect(useConnectErrorStore.getState().tone).toBe("warning");
   });
 
-  it("ignores an empty message so no blank banner can render", () => {
+  it("ignores an empty message", () => {
     reportConnectError("");
     reportConnectError(null);
     reportConnectError(undefined);
@@ -37,29 +48,22 @@ describe("connect-error-store", () => {
     expect(useConnectErrorStore.getState().message).toBeNull();
   });
 
-  it("replaces the previous message rather than stacking failures", () => {
-    reportConnectError("First failure.");
+  it("drops the action when the banner is cleared", () => {
+    reportConnectError("The host key could not be approved.", "error", {
+      label: "Open host",
+      href: "/hosts?edit=host-1",
+    });
+    useConnectErrorStore.getState().clearConnectError();
+
+    const state = useConnectErrorStore.getState();
+    expect(state.message).toBeNull();
+    expect(state.action).toBeNull();
+  });
+
+  it("replaces a stale action when a new failure is reported", () => {
+    reportConnectError("First failure.", "error", { label: "Open host", href: "/hosts?edit=1" });
     reportConnectError("Second failure.");
 
-    expect(useConnectErrorStore.getState().message).toBe("Second failure.");
-  });
-
-  it("clears the message", () => {
-    reportConnectError("Something failed.");
-    useConnectErrorStore.getState().clearConnectError();
-
-    expect(useConnectErrorStore.getState().message).toBeNull();
-  });
-
-  it("resets the tone to error when the message is cleared", () => {
-    // A dismissed warning must not leave the tone amber for the next failure,
-    // so clearing resets the tone as well as the message.
-    reportConnectError("Connection cancelled — host key was not trusted.", "warning");
-    expect(useConnectErrorStore.getState().tone).toBe("warning");
-
-    useConnectErrorStore.getState().clearConnectError();
-
-    expect(useConnectErrorStore.getState().message).toBeNull();
-    expect(useConnectErrorStore.getState().tone).toBe("error");
+    expect(useConnectErrorStore.getState().action).toBeNull();
   });
 });

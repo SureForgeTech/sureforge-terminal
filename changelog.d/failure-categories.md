@@ -1,0 +1,3 @@
+- [FIX] Browser mode: a refused host key and a refused sign-in method now carry their category beside the message, so a host whose key was refused is not dialled again and again, and a sign-in the backend was told not to use is not retried.
+- [FIX] Browser mode: a shell that opens after its session already failed no longer brings the session back or runs the commands that were typed in the meantime, and a refused shell or a broken connection is reported in fixed words rather than the host's own.
+- [FIX] Browser mode: a private key that cannot be read says so instead of "Internal server error.", and input that had to be dropped before the shell opened is now reported rather than lost quietly.

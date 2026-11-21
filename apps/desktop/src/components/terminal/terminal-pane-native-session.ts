@@ -329,6 +329,11 @@ export function createTerminalPaneNativeSessionController(options: TerminalPaneN
                 agentForwarding,
                 authMethod,
                 environment: stableEnvironment,
+                // The group is what a group's settings hang off, so a fresh
+                // connection has to carry it: without it the group's user
+                // name, bastion, environment and SFTP root were ignored on
+                // every new session.
+                group: readLatestHost().group,
                 hostKeyPolicy,
                 hostname,
                 id,
@@ -396,12 +401,17 @@ export function createTerminalPaneNativeSessionController(options: TerminalPaneN
 
         clearBackendSession();
         // The same retry rule as a failed connect: a changed host key or a
-        // refused login is never retried; the user has to fix it first.
+        // refused login is never retried; the user has to fix it first. The
+        // frame carries the category when the backend knows it, so a refused
+        // sign-in is still refused after its message became fixed text.
         if (
-          shouldScheduleReconnect(classifySshError(message.message).category, {
-            connectedOnce: connectedOnceRef.current,
-            reconnectOnRestore: reconnectOnRestoreRef.current,
-          })
+          shouldScheduleReconnect(
+            classifySshError({ code: message.code, message: message.message }).category,
+            {
+              connectedOnce: connectedOnceRef.current,
+              reconnectOnRestore: reconnectOnRestoreRef.current,
+            }
+          )
         ) {
           scheduleReconnect(message.message);
           return;

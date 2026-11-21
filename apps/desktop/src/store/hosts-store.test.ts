@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { useGroupSettingsStore } from "./group-settings-store";
 import { defaultHostKeyPolicy, defaultHostProtocol, emptyHostFormValues, sampleHosts } from "../types/host";
 import {
   applyHostFilters,
@@ -44,6 +45,62 @@ describe("hosts store helpers", () => {
 
     const updatedHosts = upsertHostCollection(sampleHosts, draft, sampleHosts[1].id);
     expect(updatedHosts.find((host) => host.id === sampleHosts[1].id)?.label).toBe("Docs Box");
+  });
+
+  it("leaves the SFTP root empty when the group supplies one", () => {
+    // The group's root is a default, so the host inherits it at connect
+    // time instead of carrying a root it never chose. Without a group the
+    // host keeps the old default.
+    useGroupSettingsStore.getState().setGroupSettings("Acme / Production", {
+      sftpRoot: "/srv/app",
+    });
+
+    const created = createHostRecord({
+      ...emptyHostFormValues,
+      label: "Grouped host",
+      hostname: "box.internal",
+      username: "ops",
+      group: "Acme / Production",
+      sftpRoot: "",
+    });
+
+    expect(created.sftpRoot).toBe("");
+
+    useGroupSettingsStore.getState().clearGroupSettings("Acme / Production");
+  });
+
+  it("finds the group's root when the group is written with spaces around it", () => {
+    // The group is trimmed when the host is saved, so the settings are
+    // looked up with the trimmed name.
+    useGroupSettingsStore.getState().setGroupSettings("Acme / Production", {
+      sftpRoot: "/srv/app",
+    });
+
+    const created = createHostRecord({
+      ...emptyHostFormValues,
+      label: "Grouped host",
+      hostname: "box.internal",
+      username: "ops",
+      group: "  Acme / Production  ",
+      sftpRoot: "",
+    });
+
+    expect(created.group).toBe("Acme / Production");
+    expect(created.sftpRoot).toBe("");
+
+    useGroupSettingsStore.getState().clearGroupSettings("Acme / Production");
+  });
+
+  it("keeps the default SFTP root when no group supplies one", () => {
+    const created = createHostRecord({
+      ...emptyHostFormValues,
+      label: "Ungrouped host",
+      hostname: "box.internal",
+      username: "ops",
+      sftpRoot: "",
+    });
+
+    expect(created.sftpRoot).toBe("/home");
   });
 
   it("propagates form-supplied identityId onto the host record (P2-DM1)", () => {

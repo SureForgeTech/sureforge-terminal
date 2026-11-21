@@ -6,7 +6,7 @@ port forwarding in a native macOS shell.
 ## Install
 
 Download the latest signed, notarized build from the
-[Releases](https://github.com/ABD-Enterprises/terminal-workspace/releases) page,
+[Releases](https://github.com/SureForgeTech/sureforge-terminal/releases) page,
 then move **Terminal Workspace.app** into `/Applications`.
 
 The app checks for updates automatically and installs them in place — watch for

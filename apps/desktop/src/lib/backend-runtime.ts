@@ -24,6 +24,7 @@ import type { PortForwardRecord } from "../types/forward";
 import type { HostProtocol } from "../types/host";
 import type { KeyMetadata } from "../types/key";
 import { backendErrorMessageFromBody, errorMessageFromUnknown } from "./error-message";
+import { isSshErrorCategory, type SshErrorCategory } from "./ssh-error-classifier";
 
 interface TauriInternals {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
@@ -152,7 +153,7 @@ export interface Backend {
 type SessionFrame =
   | { type: "data"; data: string }
   | { type: "status"; state: SessionConnectionState }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string; code?: SshErrorCategory };
 
 const SESSION_CONNECTION_STATES: readonly SessionConnectionState[] = [
   "connecting",
@@ -191,9 +192,17 @@ export function parseSessionFrame(raw: unknown): SessionFrame | null {
         ? { type: "status", state: frame.state as SessionConnectionState }
         : null;
     case "error":
-      return typeof frame.message === "string"
-        ? { type: "error", message: frame.message }
-        : null;
+      if (typeof frame.message !== "string") {
+        return null;
+      }
+      // A typed failure carries the category beside the message, so the
+      // classifier can tell a refused sign-in from an unreachable host
+      // without reading the text. A code this app does not know is ignored.
+      return {
+        type: "error",
+        message: frame.message,
+        ...(isSshErrorCategory(frame.code) ? { code: frame.code } : {}),
+      };
     default:
       return null;
   }

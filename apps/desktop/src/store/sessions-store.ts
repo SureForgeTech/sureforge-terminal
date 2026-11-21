@@ -16,6 +16,8 @@ import {
   type SplitDirection,
 } from "../types/session";
 import { closeSession } from "../lib/backend-runtime";
+import { OutputRedactor } from "../lib/redact-secrets";
+import { useAppStore } from "./app-store";
 
 /**
  * Tear down the live backend session behind every pane in `paneIds` (best
@@ -55,6 +57,95 @@ const TERMINAL_BELL_REGEX = new RegExp(TERMINAL_BELL_CHARACTER, "g");
 
 function limitCommandHistory(commandHistory: SessionCommandHistoryEntry[]) {
   return commandHistory.slice(0, SESSION_HISTORY_LIMIT);
+}
+
+// The redactor of each history entry, kept in memory only.
+//
+// The redaction has to see a command's output as a WHOLE: the terminal
+// streams it in pieces, and a secret split across two pieces — "password="
+// in one, the value in the next — is only a secret once the pieces are
+// joined. The redactor holds the pieces until it can recognise the secret,
+// and hands back the redacted preview of everything so far.
+//
+// The redactor never enters the store state, so what it holds cannot be
+// persisted.
+const outputRedactors = new Map<string, OutputRedactor>();
+
+// How long the output of a command has to be quiet before it is treated as
+// finished. A command that prints nothing more is over, and a value that
+// was still open is masked the way the whole-text redaction masks it.
+const OUTPUT_QUIET_MS = 1_500;
+
+const outputFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** Forget the timer that finishes the output of an entry. */
+function cancelOutputFlush(entryId: string) {
+  const timer = outputFlushTimers.get(entryId);
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    outputFlushTimers.delete(entryId);
+  }
+}
+
+/**
+ * Schedule the end of the output of an entry.
+ *
+ * The output of a command stops when the command is over, so a quiet period
+ * is the signal that what was written is all there will be.
+ */
+function scheduleOutputFlush(entryId: string, flush: () => void) {
+  cancelOutputFlush(entryId);
+  const timer = setTimeout(() => {
+    outputFlushTimers.delete(entryId);
+    flush();
+  }, OUTPUT_QUIET_MS);
+  // The timer must not keep the process alive.
+  const unref = (timer as unknown as { unref?: () => void }).unref;
+  if (typeof unref === "function") {
+    unref.call(timer);
+  }
+  outputFlushTimers.set(entryId, timer);
+}
+
+/**
+ * Finish the output of the commands of a pane.
+ *
+ * A value that was still open when the command's output ended is masked the
+ * way the whole-text redaction masks it, so that what is kept is the same
+ * as if the output had arrived in one piece.
+ */
+function finishPaneOutput(
+  state: SessionWorkspaceState & { commandHistory: SessionCommandHistoryEntry[] },
+  paneIds: string[]
+): SessionWorkspaceState & { commandHistory: SessionCommandHistoryEntry[] } {
+  let finished = state;
+  for (const entry of finished.commandHistory) {
+    if (!paneIds.includes(entry.paneId)) {
+      continue;
+    }
+    const redactor = outputRedactors.get(entry.id);
+    if (!redactor) {
+      continue;
+    }
+    finished = setPaneCommandHistoryOutput(finished, entry.id, redactor.flush());
+  }
+  return finished;
+}
+
+/**
+ * Forget the redactor of entries the history no longer holds.
+ *
+ * The redactors are keyed by history entry, so an entry the history drops
+ * would otherwise leave its output behind for the rest of the session.
+ */
+function forgetDroppedCommandOutput(commandHistory: SessionCommandHistoryEntry[]) {
+  const held = new Set(commandHistory.map((entry) => entry.id));
+  for (const entryId of outputRedactors.keys()) {
+    if (!held.has(entryId)) {
+      outputRedactors.delete(entryId);
+      cancelOutputFlush(entryId);
+    }
+  }
 }
 
 function normalizePersistedPane(pane: SessionPane): SessionPane {
@@ -619,7 +710,16 @@ export function recordPaneCommandHistory(
   };
 }
 
-export function appendPaneCommandHistoryOutput(
+/**
+ * Set the output preview of a history entry.
+ *
+ * The preview is SET, not appended: the caller hands over the whole output
+ * of the command, because the redaction has to see the whole output before
+ * any of it can be kept. Appending a redacted piece at a time would let a
+ * secret that straddles two pieces through — "password=" in one piece and
+ * the value in the next is not a secret to either piece on its own.
+ */
+export function setPaneCommandHistoryOutput(
   state: SessionWorkspaceState & { commandHistory: SessionCommandHistoryEntry[] },
   entryId: string,
   output: string
@@ -634,9 +734,7 @@ export function appendPaneCommandHistoryOutput(
       return entry;
     }
 
-    const outputPreview = `${entry.outputPreview ? `${entry.outputPreview}\n` : ""}${normalizedOutput}`
-      .slice(-SESSION_HISTORY_OUTPUT_LIMIT)
-      .trim();
+    const outputPreview = normalizedOutput.slice(-SESSION_HISTORY_OUTPUT_LIMIT).trim();
     return {
       ...entry,
       outputPreview,
@@ -722,7 +820,11 @@ export const useSessionsStore = create<SessionsState>()(
         if (tab) {
           closeBackendSessionsForPanes(panes, tab.paneIds);
         }
-        set((state) => closeSessionTab(state, tabId));
+        set((state) => {
+          // The tab is closing, so the output of its commands is over.
+          const finished = tab ? finishPaneOutput(state, tab.paneIds) : state;
+          return closeSessionTab(finished, tabId);
+        });
       },
       splitTab: (tabId, host) => set((state) => splitSessionPane(state, tabId, host)),
       closePanesForHost: (hostId) => {
@@ -733,7 +835,8 @@ export const useSessionsStore = create<SessionsState>()(
         closeBackendSessionsForPanes(get().panes, paneIds);
         
         set((state) => {
-          let nextState = { ...state };
+          // The panes are closing, so the output of their commands is over.
+          let nextState = finishPaneOutput(state, paneIds);
           // Find tabs that contain these panes and remove the panes
           for (const tab of nextState.tabs) {
             const overlap = tab.paneIds.filter(id => paneIds.includes(id));
@@ -758,7 +861,11 @@ export const useSessionsStore = create<SessionsState>()(
       },
       closePane: (tabId, paneId) => {
         closeBackendSessionsForPanes(get().panes, [paneId]);
-        set((state) => removeSessionPane(state, tabId, paneId));
+        set((state) => {
+          // The pane is closing, so the output of its commands is over.
+          const finished = finishPaneOutput(state, [paneId]);
+          return removeSessionPane(finished, tabId, paneId);
+        });
       },
       selectPane: (tabId, paneId) => set((state) => setActiveSessionPane(state, tabId, paneId)),
       setPaneState: (paneId, connectionState, connectionError) =>
@@ -777,12 +884,59 @@ export const useSessionsStore = create<SessionsState>()(
         set((state) => consumePaneCommand(state, paneId, commandId)),
       recordPaneCommand: (paneId, command, source = "queued") => {
         const nextState = recordPaneCommandHistory(get(), paneId, command, source);
-        set(nextState);
-        return nextState.commandHistory[0]?.id;
+        forgetDroppedCommandOutput(nextState.commandHistory);
+        // The output of the previous command in THIS pane is finished, so a
+        // value that was still open is masked the way the whole-text
+        // redaction masks it. The commands in the other panes are still
+        // running, and their output must not be finished by this one.
+        let finished = nextState;
+        for (const entry of finished.commandHistory) {
+          if (entry.paneId !== paneId || entry.id === nextState.commandHistory[0]?.id) {
+            continue;
+          }
+          const redactor = outputRedactors.get(entry.id);
+          if (!redactor) {
+            continue;
+          }
+          finished = setPaneCommandHistoryOutput(finished, entry.id, redactor.flush());
+        }
+        set(finished);
+        return finished.commandHistory[0]?.id;
       },
-      appendCommandOutput: (entryId, output) =>
-        set((state) => appendPaneCommandHistoryOutput(state, entryId, output)),
-      clearCommandHistory: () => set(() => ({ commandHistory: [] })),
+      appendCommandOutput: (entryId, output) => {
+        // The preview is persisted with the history, so a secret printed by a
+        // command would sit in local storage until the history was cleared.
+        // The command itself is NOT redacted: the history replays it into a
+        // session, and a redacted command would run as something else.
+        const redact = useAppStore.getState().redactCommandOutput;
+        set((state) => {
+          // The output arrives in pieces. The pieces are held by the
+          // redactor until it can recognise a secret that straddles them,
+          // and the preview is always the redacted form of everything seen
+          // so far.
+          const redactor = outputRedactors.get(entryId) ?? new OutputRedactor(redact);
+          redactor.setRedactionEnabled(redact);
+          outputRedactors.set(entryId, redactor);
+
+          const next = setPaneCommandHistoryOutput(state, entryId, redactor.append(output));
+          // The output of a command is over when it goes quiet, so a value
+          // that was still open is masked the way the whole-text redaction
+          // masks it.
+          scheduleOutputFlush(entryId, () => {
+            const current = get();
+            const entry = current.commandHistory.find((candidate) => candidate.id === entryId);
+            if (!entry) {
+              return;
+            }
+            set(setPaneCommandHistoryOutput(current, entryId, redactor.flush()));
+          });
+          return next;
+        });
+      },
+      clearCommandHistory: () => {
+        outputRedactors.clear();
+        set(() => ({ commandHistory: [] }));
+      },
       queueCommandForHosts: (hosts, command, label) => {
         const paneIds: string[] = [];
 

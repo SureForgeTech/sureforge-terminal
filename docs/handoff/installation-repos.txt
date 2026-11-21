@@ -1,0 +1,11 @@
+SureForgeTech/sureforge-1min
+SureForgeTech/sureforge-capture
+SureForgeTech/sureforge-cfr
+SureForgeTech/sureforge-fm-data-api
+SureForgeTech/sureforge-fm-mcp
+SureForgeTech/sureforge-fm-snippets
+SureForgeTech/sureforge-jira-mcp
+SureForgeTech/sureforge-policy-public
+SureForgeTech/sureforge-release-mcp
+SureForgeTech/sureforge-zendesk
+SureForgeTech/sureforgetech

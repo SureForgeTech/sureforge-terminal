@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { createTermsnipStorage } from "../lib/persistence";
+import { useGroupSettingsStore } from "./group-settings-store";
 import { buildHostSearchText, parseEnvironmentVariables, splitCommaList } from "../lib/utils";
 import {
   createLocalShellHostRecord,
@@ -71,6 +72,25 @@ function normalizeHostRecord(host: HostRecord): HostRecord {
   };
 }
 
+/**
+ * The SFTP root a host record carries.
+ *
+ * A host that names a root keeps it. A host that leaves it empty takes the
+ * group's root when the group has one — the group's root is a default, so it
+ * is left empty here and applied when the connection is built. A host with
+ * no group to inherit from keeps the old default.
+ */
+function resolveSftpRoot(value: string, group: string): string {
+  const trimmed = value.trim();
+  if (trimmed) {
+    return trimmed;
+  }
+  const groupSftpRoot = useGroupSettingsStore
+    .getState()
+    .groupSettings[group.trim()]?.sftpRoot?.trim();
+  return groupSftpRoot ? "" : "/home";
+}
+
 export function createHostRecord(values: HostFormValues, currentHost?: HostRecord): HostRecord {
   const now = new Date().toISOString();
   const protocol = values.protocol;
@@ -102,7 +122,7 @@ export function createHostRecord(values: HostFormValues, currentHost?: HostRecor
     agentForwarding: supportsCredentials ? values.agentForwarding : false,
     environment: parseEnvironmentVariables(values.environment),
     jumpHostId: supportsJumpHosts ? values.jumpHostId || undefined : undefined,
-    sftpRoot: supportsSftp ? values.sftpRoot.trim() || "/home" : "",
+    sftpRoot: supportsSftp ? resolveSftpRoot(values.sftpRoot, values.group) : "",
     snippetCount: currentHost?.snippetCount ?? 0,
     forwardingCount: currentHost?.forwardingCount ?? 0,
     createdAt: currentHost?.createdAt ?? now,

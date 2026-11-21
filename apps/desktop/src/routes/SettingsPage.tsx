@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from "react";
+import { GroupSettingsSection } from "./SettingsGroupSettingsSection";
 import { SettingsPreferencesSection } from "./SettingsPreferencesSection";
 import { SettingsTrustPolicySection } from "./SettingsTrustPolicySection";
 import { IdentityEditor, type IdentityEditorValues } from "../components/identities/IdentityEditor";
@@ -143,6 +144,7 @@ export function SettingsPage() {
     <section className="grid h-full min-h-0 gap-3 overflow-auto pr-1">
       <div className="grid max-w-3xl gap-3">
         <SettingsPreferencesSection />
+        <GroupSettingsSection />
 
         <div className="rounded-[22px] border border-slate-800/80 bg-slate-950/45 p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
