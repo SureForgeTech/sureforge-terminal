@@ -9,7 +9,7 @@
 // reject, and an app updated through that feed would keep trusting the old
 // key and reject every update after it.
 import fs from "node:fs";
-import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 export function readUpdaterPubkey(tauriConfPath) {
   const config = JSON.parse(fs.readFileSync(tauriConfPath, "utf8"));
@@ -75,6 +75,9 @@ function main() {
   }
 }
 
-if (import.meta.url === new URL(`file://${path.resolve(process.argv[1] || "")}`).href) {
+// `pathToFileURL` encodes the path, so a checkout under a directory whose
+// name holds a `#` or a `?` still matches: a hand-built `file://` URL would
+// not, and the guard would then exit successfully without having run.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main();
 }
