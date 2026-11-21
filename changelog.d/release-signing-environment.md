@@ -1,0 +1,1 @@
+- [INTERNAL] Releases now start by dispatch and sign behind the protected release-signing environment (#621)

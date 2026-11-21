@@ -12,9 +12,6 @@ on:
         required: false
         default: stable
         type: string
-  push:
-    tags:
-      - "v*"
 
 permissions:
   contents: write
@@ -24,6 +21,9 @@ env:
 
 jobs:
   release-macos:
+    # Signing secrets live only in the protected "release-signing" environment,
+    # which requires the owner's approval before this job can read them.
+    environment: release-signing
     # This job signs, notarizes and publishes, so it never runs on the
     # shared self-hosted macOS pool (that pool executes pull-request code).
     # The fallback label set below deliberately matches no runner: until a
