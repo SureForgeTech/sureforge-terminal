@@ -1,0 +1,1 @@
+- [BREAKING] The updater signing key was rotated: installed copies still trust the old key, so each one needs a manual reinstall before it can update (#622)

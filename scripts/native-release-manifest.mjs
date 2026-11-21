@@ -39,6 +39,12 @@ const manifest = {
   branch: process.env.BUILD_BRANCH || null,
   commit: process.env.BUILD_COMMIT || null,
   dirty: normalizeBoolean(process.env.BUILD_DIRTY || "false"),
+  updater: {
+    // The updater public key the app was built with. The release path
+    // compares it with the key it signs the update feed with, so a bundle
+    // built before a key rotation cannot be released against the new key.
+    pubkey: process.env.UPDATER_PUBKEY || null,
+  },
   manifest: {
     path: manifestPath,
     fileName: path.basename(manifestPath),
