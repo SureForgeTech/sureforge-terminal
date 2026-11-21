@@ -36,6 +36,7 @@ if [[ "$1" == "release" && "$2" == "upload" ]]; then
   exit 0
 fi
 if [[ "$1" == "api" ]]; then
+  echo "API $*" >> "$FAKE_LOG"
   case "\${FAKE_TAG_STATE:-present}" in
     missing) echo "gh: Not Found (HTTP 404)" >&2; exit 1;;
     broken) echo "Get https://api.github.com/x: dial tcp: lookup api.github.com: no such host" >&2; exit 1;;
@@ -190,6 +191,7 @@ describe("publishing a release keeps the tag and the assets on one commit", () =
     const result = publish(dir, { FAKE_TAG_STATE: "present", FAKE_TAG_COMMIT: OTHER });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(`tag 'v${VERSION}' names commit '${OTHER}'`);
+    expect(result.log).toContain("API");
     expect(result.log).not.toContain("UPLOAD");
     rmSync(dir, { force: true, recursive: true });
   });
@@ -212,6 +214,7 @@ describe("publishing a release keeps the tag and the assets on one commit", () =
     });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(`tag 'v${VERSION}' names commit '${OTHER}'`);
+    expect(result.log).toContain("API");
     expect(result.log).not.toContain("UPLOAD");
     rmSync(dir, { force: true, recursive: true });
   });

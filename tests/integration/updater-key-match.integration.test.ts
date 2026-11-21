@@ -22,10 +22,11 @@ const OLD_KEY = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI5RkNDNzA
 const NEW_KEY = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE3QTU5QjAxRjAyMUREM0QKUldROTNTSHdBWnVscDl5MTBQdEhNRVBMcG9MOEp1amdyU3RSVnFtT2hpQkgyaUU4SEpVcXVMcysK";
 
 const FAKE_GH = `#!/usr/bin/env bash
-if [[ "$1" == "release" && "$2" == "view" ]]; then exit 0; fi
+if [[ "$1" == "release" && "$2" == "view" ]]; then echo "VIEW $*" >> "$FAKE_LOG"; exit 0; fi
 if [[ "$1" == "release" && "$2" == "create" ]]; then echo "CREATE $*" >> "$FAKE_LOG"; exit 0; fi
 if [[ "$1" == "release" && "$2" == "upload" ]]; then echo "UPLOAD $*" >> "$FAKE_LOG"; exit 0; fi
 if [[ "$1" == "api" ]]; then
+  echo "API $*" >> "$FAKE_LOG"
   printf '%s\\t%s\\n' "\${FAKE_TAG_COMMIT}" "commit"
   exit 0
 fi
@@ -73,7 +74,7 @@ function fixture(manifestUpdater: Record<string, unknown>) {
 }
 
 function publish(dir: string) {
-  const log = join(dir, "gh.log");
+  const logPath = join(dir, "gh.log");
   try {
     execFileSync("bash", [join(dir, "scripts/native-publish-release.sh")], {
       cwd: dir,
@@ -82,17 +83,17 @@ function publish(dir: string) {
         ...process.env,
         PATH: `${join(dir, "bin")}:${process.env.PATH}`,
         GITHUB_REPOSITORY: "owner/repository",
-        FAKE_LOG: log,
+        FAKE_LOG: logPath,
         FAKE_TAG_COMMIT: BUILT,
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
-    return { status: 0, stderr: "", log: readFileSync(log, "utf8") };
+    return { status: 0, stderr: "", log: readFileSync(logPath, "utf8") };
   } catch (error) {
     const failure = error as { status?: number; stderr?: string };
-    let log = "";
+    let log: string;
     try {
-      log = readFileSync(log, "utf8");
+      log = readFileSync(logPath, "utf8");
     } catch {
       log = "";
     }
@@ -150,13 +151,61 @@ describe("updater key match", () => {
   });
 });
 
+function promoteFixture(manifestUpdater: Record<string, unknown>) {
+  const dir = mkdtempSync(join(tmpdir(), "updater-key-promote-"));
+  mkdirSync(join(dir, "scripts"), { recursive: true });
+  mkdirSync(join(dir, "src-tauri"), { recursive: true });
+  mkdirSync(join(dir, "artifacts/release"), { recursive: true });
+  mkdirSync(join(dir, "bundle"), { recursive: true });
+
+  for (const file of ["native-promote.sh", "load-env.sh", "verify-updater-key-match.mjs"]) {
+    copyFileSync(join(ROOT, "scripts", file), join(dir, "scripts", file));
+  }
+  copyFileSync(join(ROOT, ".env.shared"), join(dir, ".env.shared"));
+  writeFileSync(
+    join(dir, "src-tauri/tauri.conf.json"),
+    `${JSON.stringify({ version: VERSION, plugins: { updater: { pubkey: NEW_KEY } } }, null, 2)}\n`,
+  );
+  writeFileSync(
+    join(dir, "artifacts/release/latest-macos-release.json"),
+    `${JSON.stringify(
+      {
+        version: VERSION,
+        commit: BUILT,
+        bundle: { path: join(dir, "bundle"), exists: true },
+        updater: manifestUpdater,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  return dir;
+}
+
+function promote(dir: string) {
+  try {
+    execFileSync("bash", [join(dir, "scripts/native-promote.sh")], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${join(dir, "bin")}:${process.env.PATH}` },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return { status: 0, stderr: "" };
+  } catch (error) {
+    const failure = error as { status?: number; stderr?: string };
+    return { status: failure.status ?? 1, stderr: failure.stderr ?? "" };
+  }
+}
+
 describe("publishing refuses a bundle that no longer trusts the signing key", () => {
   it("refuses a bundle built before the key rotation", () => {
     const dir = fixture({ pubkey: OLD_KEY });
     const result = publish(dir);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("trusts updater key");
-    expect(result.log).not.toContain("UPLOAD");
+    // The check runs before the release is touched, so the fake GitHub CLI
+    // was never called: the empty log is evidence that nothing was published.
+    expect(result.log).toBe("");
     rmSync(dir, { force: true, recursive: true });
   });
 
@@ -165,7 +214,7 @@ describe("publishing refuses a bundle that no longer trusts the signing key", ()
     const result = publish(dir);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("records no updater public key");
-    expect(result.log).not.toContain("UPLOAD");
+    expect(result.log).toBe("");
     rmSync(dir, { force: true, recursive: true });
   });
 
@@ -174,6 +223,33 @@ describe("publishing refuses a bundle that no longer trusts the signing key", ()
     const result = publish(dir);
     expect(result.status).toBe(0);
     expect(result.log).toContain("UPLOAD release upload");
+    rmSync(dir, { force: true, recursive: true });
+  });
+});
+
+describe("promotion refuses a bundle that no longer trusts the signing key", () => {
+  it("refuses a bundle built before the key rotation", () => {
+    const dir = promoteFixture({ pubkey: OLD_KEY });
+    const result = promote(dir);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("trusts updater key");
+    rmSync(dir, { force: true, recursive: true });
+  });
+
+  it("refuses a bundle that records no key", () => {
+    const dir = promoteFixture({});
+    const result = promote(dir);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("records no updater public key");
+    rmSync(dir, { force: true, recursive: true });
+  });
+
+  it("lets a bundle that trusts the signing key past the check", () => {
+    const dir = promoteFixture({ pubkey: NEW_KEY });
+    const result = promote(dir);
+    // The steps after the check need a signed bundle on a macOS runner, so
+    // only the check itself is asserted here.
+    expect(result.stderr).not.toContain("trusts updater key");
     rmSync(dir, { force: true, recursive: true });
   });
 });
