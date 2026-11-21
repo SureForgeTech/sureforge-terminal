@@ -86,10 +86,15 @@ const RULES: ClassifierRule[] = [
     // not there. This rule comes first so a refusal never reads as a
     // mismatch.
     //
-    // Both runtimes say "DSA (ssh-dss)": the native shell
-    // (src-tauri/src/native_host_keys.rs) and the browser backend
+    // The refusal phrase, and not the algorithm name alone: a private key
+    // or a user key of the same algorithm is a different failure with a
+    // different fix, and it must not be reported as a host key that was
+    // refused.
+    //
+    // Both runtimes say "offered only a DSA (ssh-dss) host key": the native
+    // shell (src-tauri/src/native_host_keys.rs) and the browser backend
     // (apps/desktop/server/backend-host-keys.mjs).
-    match: /DSA \(ssh-dss\)/i,
+    match: /offered only a DSA \(ssh-dss\) host key/i,
     message: "The host key is too weak to trust.",
     hint:
       "The server offered a DSA (ssh-dss) host key, which this app refuses. Ask the server's administrator to add an Ed25519 or ECDSA host key.",

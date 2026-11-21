@@ -8,6 +8,9 @@ import {
 import { resolveRemotePath, sanitizeFilename } from "./backend-paths.mjs";
 import { sftpOperationFailure } from "./backend-sftp-failure.mjs";
 
+// How long the listing waits for a link's target before giving up on it.
+const LINK_TARGET_TIMEOUT_MS = 2_000;
+
 const FILE_TYPE_MASK = 0o170000;
 const DIRECTORY_TYPE = 0o040000;
 const LINK_TYPE = 0o120000;
@@ -59,12 +62,29 @@ export function toIsoTimestamp(unixSeconds) {
  */
 async function linkTargetIsDirectory(sftp, entryPath) {
   return new Promise((resolve) => {
-    sftp.stat(entryPath, (error, stats) => {
-      if (error || !stats) {
-        resolve(false);
+    let settled = false;
+    const finish = (value) => {
+      if (settled) {
         return;
       }
-      resolve(isDirectory(stats));
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+
+    // A target that never answers must not take the listing with it: the
+    // link stays a file, and the listing is delivered.
+    const timer = setTimeout(() => finish(false), LINK_TARGET_TIMEOUT_MS);
+    if (typeof timer.unref === "function") {
+      timer.unref();
+    }
+
+    sftp.stat(entryPath, (error, stats) => {
+      if (error || !stats) {
+        finish(false);
+        return;
+      }
+      finish(isDirectory(stats));
     });
   });
 }

@@ -55,6 +55,21 @@ describe("classifySshError", () => {
     expect(classified.message).toBe("The host key is too weak to trust.");
   });
 
+  it("does not call a private or user key of the same algorithm a host key", () => {
+    // A DSA (ssh-dss) private key that will not load is a different failure
+    // with a different fix, and it must not be reported as a host key that
+    // was refused.
+    for (const message of [
+      "Failed to load DSA (ssh-dss) private key",
+      "DSA (ssh-dss) user key refused by the server",
+    ]) {
+      const classified = classifySshError(new Error(message));
+
+      expect(classified.message).not.toBe("The host key is too weak to trust.");
+      expect(classified.category).not.toBe("host_key_mismatch");
+    }
+  });
+
   it("still names a changed key as a changed key", () => {
     const classified = classifySshError({ message: "REMOTE HOST IDENTIFICATION HAS CHANGED" });
 
