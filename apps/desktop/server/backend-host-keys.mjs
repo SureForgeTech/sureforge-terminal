@@ -55,6 +55,7 @@ import { constants } from "node:fs";
 import { chmod, mkdir, open, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { SSH_FAILURE_CODES } from "./backend-failure-codes.mjs";
 
 /** The bundle identifier, so the browser backend and the native app agree. */
 const APP_IDENTIFIER = "com.abdenterprises.terminalworkspace";
@@ -138,8 +139,11 @@ export function knownHostsHostPattern(hostname, port) {
  * The refusal message reaches a terminal, which interprets escape sequences.
  * A hostname carrying one could forge terminal output on top of the real
  * error, so control characters are dropped before the message is built.
+ *
+ * Exported because the connection-failure messages need the same guarantee:
+ * they reach the same terminal by the same route.
  */
-function safeHostLabel(hostname, port) {
+export function safeHostLabel(hostname, port) {
   // Drop the C0 control characters, DEL, and the C1 range (0x80-0x9F).
   // Written out rather than matched with a regular expression so the intent
   // is readable and the lint rule about control characters in patterns does
@@ -232,6 +236,34 @@ export function hostKeyMismatchMessage(hostname, port) {
 }
 
 /**
+ * The message a changed host key produces when the host carries a key the
+ * user approved explicitly.
+ *
+ * The trust-on-first-use path says the key "does not match the one first
+ * seen"; this one was approved, not merely seen, and the user has to replace
+ * that approval — so it says which one is being contradicted. The rest of the
+ * wording is the first-seen message's, so the two read the same way.
+ *
+ * The opening words are the same on purpose: the renderer's classifier
+ * recognises a changed host key by that wording, and a changed host key must
+ * never be retried automatically (a machine-in-the-middle signal is not
+ * something to keep knocking on the door about).
+ *
+ * The native shell words this event differently — it sends a typed
+ * host-key-mismatch error whose message is one short line — because it has a
+ * code channel to carry the category and this backend does not. The browser
+ * backend therefore has to say it in words the classifier can read.
+ */
+export function approvedHostKeyMismatchMessage(hostname, port) {
+  return (
+    `Host key verification failed for ${safeHostLabel(hostname, port)}: the presented host key ` +
+    "does not match the one approved for this host. Credentials were not sent. This may indicate " +
+    "a machine-in-the-middle attack, or the host may have been rebuilt — re-scan and explicitly " +
+    "trust the replacement key before reconnecting."
+  );
+}
+
+/**
  * The message an unverifiable host key produces: the store could not be read
  * or written, or the key was unusable.
  */
@@ -285,6 +317,15 @@ export class HostKeyRejectedError extends Error {
     // 403, not 500: the request was refused on purpose, and the caller did
     // nothing wrong that a retry would fix.
     this.statusCode = 403;
+    // The category the client branches on. A refused host key — the key
+    // changed, or the key is too weak to trust — is the machine-in-the-middle
+    // signal, and the renderer's retry policy must not retry it. The wording
+    // alone does not carry that far: a weak-key refusal reads as an unknown
+    // failure, and an unknown failure IS retried.
+    //
+    // A caller whose refusal is NOT a changed key (a store that could not be
+    // read, say) passes its own category.
+    this.code = options?.code ?? SSH_FAILURE_CODES.hostKeyMismatch;
     // ssh2 reports a denied host key as a handshake-level error, and the
     // failure-stage mapping keys off that level. Keeping it means the
     // command path still classifies this as a host-key failure.
@@ -330,9 +371,14 @@ export function createHostKeyVerifier({ hostname, port, store }) {
         // The cause carries the detail — which file, which line, which fs
         // error — for the in-process diagnostics channel. The message the
         // client sees is built from trusted data only.
+        //
+        // The category is "internal", not "host_key_mismatch": the key did
+        // not change, the store could not be read. A store that is locked by
+        // another process for a moment should be tried again, and a changed
+        // key must not be.
         failure.error = new HostKeyRejectedError(
           hostKeyVerificationFailureMessage(hostname, port),
-          { cause: error },
+          { cause: error, code: SSH_FAILURE_CODES.internal },
         );
         callback(false);
       });
@@ -401,7 +447,17 @@ export function createTrustedHostKeyVerifier({ hostname, port, trustedKey }) {
       failure.error = new HostKeyRejectedError(weakHostKeyMessage(hostname, port));
       return false;
     }
-    return key.toString("base64") === trustedKey;
+    if (key.toString("base64") === trustedKey) {
+      return true;
+    }
+    // The host presented a key other than the approved one. That is the one
+    // failure the user has to act on — the host may have been rebuilt, or this
+    // may be a machine-in-the-middle — so it is reported with its reason.
+    // Without this the refusal carried no reason at all, and the client
+    // rebuilt it as "Internal server error." while the trust-on-first-use path
+    // reported the same attack with a reason the user could act on.
+    failure.error = new HostKeyRejectedError(approvedHostKeyMismatchMessage(hostname, port));
+    return false;
   };
   return { verify, failure };
 }

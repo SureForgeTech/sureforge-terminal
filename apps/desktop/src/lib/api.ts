@@ -46,7 +46,7 @@ import {
   scanDemoKnownHost,
   uploadDemoRemoteFile,
 } from "./demo-backend";
-import { backendErrorMessageFromBody } from "./error-message";
+import { backendErrorCodeFromBody, backendErrorMessageFromBody } from "./error-message";
 
 export type {
   BackendHostConnection,
@@ -78,7 +78,13 @@ async function backendFetch<T>(path: string, init?: RequestInit) {
   });
 
   if (!response.ok) {
-    throw new Error(backendErrorMessageFromBody(await response.text(), response.status));
+    const body = await response.text();
+    const message = backendErrorMessageFromBody(body, response.status);
+    // A failed connection carries the category beside the message, the way
+    // the native shell carries it (src-tauri/src/ipc_error.rs). The classifier
+    // reads the code first, so a refused sign-in is not retried.
+    const code = backendErrorCodeFromBody(body);
+    throw code ? Object.assign(new Error(message), { code }) : new Error(message);
   }
 
   return (await response.json()) as T;

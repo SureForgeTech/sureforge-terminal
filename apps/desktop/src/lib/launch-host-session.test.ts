@@ -207,6 +207,8 @@ describe("launchHostSession failure reporting", () => {
       setup: () => void;
       message: string;
       tone: "error" | "warning";
+      /** The action the banner offers, when the failure needs one. */
+      action?: { label: string; href: string };
     }> = [
       {
         setup: () => vi.mocked(ensureTrustedHostKey).mockRejectedValue(new Error("network down")),
@@ -224,12 +226,14 @@ describe("launchHostSession failure reporting", () => {
           vi.mocked(ensureTrustedHostKey).mockResolvedValue({ ok: false, reason: "scan-failed" }),
         message: "Could not scan a.example.com:22. Check that the host is reachable and try again.",
         tone: "error",
+        action: { label: "Open host", href: "/hosts?edit=a" },
       },
       {
         setup: () =>
           vi.mocked(ensureTrustedHostKey).mockResolvedValue({ ok: false, reason: "scan-empty" }),
         message: "a.example.com:22 returned no host keys to trust.",
         tone: "error",
+        action: { label: "Open host", href: "/hosts?edit=a" },
       },
       {
         setup: () =>
@@ -240,6 +244,9 @@ describe("launchHostSession failure reporting", () => {
         message:
           "Could not prompt for the host key of host-a. Open the host from the Hosts page to approve it.",
         tone: "error",
+        // The user has to approve a key on the host: the banner takes them
+        // there rather than only naming the problem.
+        action: { label: "Open host", href: "/hosts?edit=a" },
       },
       {
         // The defensive fall-through for a reason ensureTrustedHostKey does
@@ -254,14 +261,14 @@ describe("launchHostSession failure reporting", () => {
       },
     ];
 
-    for (const { setup, message, tone } of cases) {
+    for (const { setup, message, tone, action } of cases) {
       vi.mocked(reportConnectError).mockClear();
       setup();
 
       await launchHostSession(host("a"));
 
       expect(reportConnectError).toHaveBeenCalledTimes(1);
-      expect(reportConnectError).toHaveBeenCalledWith(message, tone);
+      expect(reportConnectError).toHaveBeenCalledWith(message, tone, action ?? null);
     }
   });
 });

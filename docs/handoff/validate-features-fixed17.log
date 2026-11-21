@@ -1,0 +1,186 @@
+
+> terminal-workspace@0.2.1 validate
+> bash ./scripts/validate.sh
+
+[validate] effort guard
+[effort-guard] ok
+[validate] version consistency
+[check-version-consistency] ok: 0.2.1 in all five version sources
+[validate] secret-argv check
+[secret-argv-check] ok: no NEW secret-bearing option carries a runtime value on argv (0 known, tracked)
+[validate] lint
+[validate] unit and integration tests
+(!) Your Vite config uses features that are unsupported by `configLoader: 'native'`, which is planned to become the default in a future major version of Vite:
+  - ESM syntax in a file loaded as CommonJS (vitest.config.ts:1:1). Use a `.mjs` extension or set `"type": "module"` in the closest package.json
+Set `VITE_CONFIG_NATIVE_IGNORE_WARNING=true` to suppress this warning.
+
+ RUN  v5.0.5 /workspace/sureforge-terminal
+
+ERROR: release is missing updater artifacts:
+         latest.json
+         <app>.app.tar.gz
+         <app>.app.tar.gz.sig
+       Refusing to publish: installed apps would not discover this version.
+       Re-run promotion with TAURI_SIGNING_PRIVATE_KEY set, or unset
+       REQUIRE_UPDATER_ARTIFACTS if this is deliberately a non-updating build.
+       Assets resolved for upload:
+         /promo/terminal-workspace-macos-v0.1.0.dmg
+ERROR: release is missing updater artifacts:
+         latest.json
+       Refusing to publish: installed apps would not discover this version.
+       Re-run promotion with TAURI_SIGNING_PRIVATE_KEY set, or unset
+       REQUIRE_UPDATER_ARTIFACTS if this is deliberately a non-updating build.
+       Assets resolved for upload:
+         /promo/terminal-workspace-macos-v0.2.0.app.dmg
+         /promo/terminal-workspace-macos-v0.2.0.app.tar.gz
+         /promo/terminal-workspace-macos-v0.2.0.app.tar.gz.sig
+ERROR: release is missing updater artifacts:
+         <app>.app.tar.gz
+       Refusing to publish: installed apps would not discover this version.
+       Re-run promotion with TAURI_SIGNING_PRIVATE_KEY set, or unset
+       REQUIRE_UPDATER_ARTIFACTS if this is deliberately a non-updating build.
+       Assets resolved for upload:
+         /promo/terminal-workspace-macos-v0.2.0.app.dmg
+         /promo/latest.json
+         /promo/terminal-workspace-macos-v0.2.0.app.tar.gz.sig
+ERROR: release is missing updater artifacts:
+         <app>.app.tar.gz.sig
+       Refusing to publish: installed apps would not discover this version.
+       Re-run promotion with TAURI_SIGNING_PRIVATE_KEY set, or unset
+       REQUIRE_UPDATER_ARTIFACTS if this is deliberately a non-updating build.
+       Assets resolved for upload:
+         /promo/terminal-workspace-macos-v0.2.0.app.dmg
+         /promo/latest.json
+         /promo/terminal-workspace-macos-v0.2.0.app.tar.gz
+ERROR: release is missing updater artifacts:
+         <app>.app.tar.gz
+       Refusing to publish: installed apps would not discover this version.
+       Re-run promotion with TAURI_SIGNING_PRIVATE_KEY set, or unset
+       REQUIRE_UPDATER_ARTIFACTS if this is deliberately a non-updating build.
+       Assets resolved for upload:
+         /promo/latest.json
+         /promo/app.app.tar.gz.sig
+ERROR: no release assets to verify — expected at least the updater triplet.
+ERROR: release is missing updater artifacts:
+         latest.json
+       Refusing to publish: installed apps would not discover this version.
+       Re-run promotion with TAURI_SIGNING_PRIVATE_KEY set, or unset
+       REQUIRE_UPDATER_ARTIFACTS if this is deliberately a non-updating build.
+       Assets resolved for upload:
+         /promo/not-latest.json
+         /promo/app.app.tar.gz
+         /promo/app.app.tar.gz.sig
+Error: connect ECONNREFUSED 127.0.0.1:3000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1638:16) {
+  errno: -111,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '127.0.0.1',
+  port: 3000
+}
+Error: connect ECONNREFUSED 127.0.0.1:3000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1638:16) {
+  errno: -111,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '127.0.0.1',
+  port: 3000
+}
+Error: connect ECONNREFUSED 127.0.0.1:3000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1638:16) {
+  errno: -111,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '127.0.0.1',
+  port: 3000
+}
+Error: connect ECONNREFUSED 127.0.0.1:3000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1638:16) {
+  errno: -111,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '127.0.0.1',
+  port: 3000
+}
+Error: connect ECONNREFUSED 127.0.0.1:3000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1638:16) {
+  errno: -111,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '127.0.0.1',
+  port: 3000
+}
+Error: connect ECONNREFUSED 127.0.0.1:3000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1638:16) {
+  errno: -111,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '127.0.0.1',
+  port: 3000
+}
+Error: connect ECONNREFUSED 127.0.0.1:3000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1638:16) {
+  errno: -111,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '127.0.0.1',
+  port: 3000
+}
+Error: connect ECONNREFUSED 127.0.0.1:3000
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1638:16) {
+  errno: -111,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '127.0.0.1',
+  port: 3000
+}
+
+ Test Files  206 passed (206)
+      Tests  1204 passed | 1 skipped (1205)
+   Start at  22:30:39
+   Duration  11.79s (tests 51%, environment 24%, import 20%, transform 3%, worker 2%)
+
+    Isolate  206 workers spawned · ~80ms startup each (spawn + environment, per file)
+             at least ~5.44s faster with isolate: false — reuses workers across files instead of one per file
+
+[validate] desktop build
+
+> desktop@0.2.1 build /workspace/sureforge-terminal/apps/desktop
+> tsc -b && vite build
+
+vite v8.3.5 building client environment for production...
+transforming...
+✓ 237 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                                     0.54 kB │ gzip:   0.33 kB
+dist/assets/SessionsPage-TdnZ7DQy.css               2.68 kB │ gzip:   0.73 kB
+dist/assets/index-CL4XQ7qJ.css                     62.60 kB │ gzip:  11.00 kB
+dist/assets/undo-toast-aP7EIp-Z.js                  0.33 kB │ gzip:   0.24 kB
+dist/assets/EmptyState-Kb98eKJj.js                  0.64 kB │ gzip:   0.35 kB
+dist/assets/core-CYtF6UP-.js                        1.07 kB │ gzip:   0.53 kB
+dist/assets/event-DrJ9mqYy.js                       1.37 kB │ gzip:   0.65 kB
+dist/assets/dist-js-DrbF7qvb.js                     1.81 kB │ gzip:   0.87 kB
+dist/assets/runbooks-store-9mgX6JvZ.js              2.05 kB │ gzip:   0.83 kB
+dist/assets/TunnelsPage-CQxg_1mC.js                 4.22 kB │ gzip:   1.57 kB
+dist/assets/backend-failure-messages-Bp4_KAUJ.js    4.74 kB │ gzip:   1.51 kB
+dist/assets/RunbooksPage-CNK7jPP-.js                9.35 kB │ gzip:   2.84 kB
+dist/assets/window-BvXEKxhT.js                     13.01 kB │ gzip:   3.14 kB
+dist/assets/SnippetsPage-DOy7ggWE.js               17.49 kB │ gzip:   4.29 kB
+dist/assets/TransfersPage-BTsfw_ng.js              18.29 kB │ gzip:   4.79 kB
+dist/assets/KeysPage-6zfjpml8.js                   22.95 kB │ gzip:   5.49 kB
+dist/assets/app-store-BYfcLspI.js                  47.99 kB │ gzip:  15.91 kB
+dist/assets/HostsPage-B0lu2n_C.js                  50.99 kB │ gzip:  14.00 kB
+dist/assets/SettingsPage-xOjUYuLS.js               58.29 kB │ gzip:  12.94 kB
+dist/assets/SessionsPage-D9WpF6oz.js              338.45 kB │ gzip:  82.73 kB
+dist/assets/index-DrpKA8xn.js                     379.78 kB │ gzip: 114.16 kB
+
+✓ built in 246ms
+[validate] rust build + tests skipped (macOS only — the native crate ships on macOS)
+[validate] native trust tooling skipped (macOS only)
+[validate] localhost sshd transport fixture skipped (set TERMSNIP_RUN_SSH_FIXTURE=1 to include — required for changes to the PTY readers, session loops, or native_transport capture loops)
+[validate] rust advisory audit skipped (set TERMSNIP_RUN_RUST_AUDIT=1 to include — required for dependency changes; CI runs it on every PR)
+[validate] real backend transport fixture skipped (macOS only — needs a local sshd)
+[validate] browser e2e skipped (set TERMSNIP_RUN_E2E=1 to include)
+[validate] Docker is unavailable, so semgrep could not run.
+[validate] Start Docker and re-run: this gate gives CI-equivalent coverage and is not optional.

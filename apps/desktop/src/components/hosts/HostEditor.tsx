@@ -20,6 +20,10 @@ import {
   type ConnectionSecretRecord,
   useConnectionSecretsStore,
 } from "../../store/connection-secrets-store";
+import {
+  groupSettingsFor,
+  useGroupSettingsStore,
+} from "../../store/group-settings-store";
 import { useHostsStore } from "../../store/hosts-store";
 import { useIdentitiesStore } from "../../store/identities-store";
 import type { IdentityRecord } from "../../types/identity";
@@ -138,6 +142,13 @@ function HostEditorContent({
   const supportsSftp = hostSupportsSftp(values.protocol);
   const supportsNetworkFields = values.protocol !== "localShell";
   const requiresUsername = protocolRequiresUsername(values.protocol);
+  // The group's settings are defaults for the hosts in it: a host that
+  // leaves the user name or the SFTP root empty takes the group's, so the
+  // form must not insist on a value the group already supplies.
+  const groupSettings = useGroupSettingsStore((state) => state.groupSettings);
+  const groupDefaults = groupSettingsFor(groupSettings, values.group.trim());
+  const groupUsername = groupDefaults?.username?.trim() ?? "";
+  const groupSftpRoot = groupDefaults?.sftpRoot?.trim() ?? "";
   const hostnameLabel = values.protocol === "serial" ? "Device path" : "Hostname";
   const hostnamePlaceholder =
     values.protocol === "serial" ? "/dev/cu.usbserial-1410" : "bastion.acme.internal";
@@ -170,7 +181,9 @@ function HostEditorContent({
         : "A hostname is required."
       : null;
   const usernameError =
-    requiresUsername && !values.username.trim() ? "A username is required." : null;
+    requiresUsername && !values.username.trim() && !groupUsername
+      ? "A username is required."
+      : null;
   const portError = supportsNetworkFields
     ? validatePortOrBaudRate(values.port, values.protocol)
     : null;
@@ -181,7 +194,7 @@ function HostEditorContent({
   const isInvalid =
     !values.label.trim() ||
     (supportsNetworkFields && !values.hostname.trim()) ||
-    (requiresUsername && !values.username.trim()) ||
+    (requiresUsername && !values.username.trim() && !groupUsername) ||
     portError !== null;
   const jumpHostOptions = hosts.filter(
     (candidate) => candidate.id !== host?.id && candidate.protocol === "ssh"
@@ -355,7 +368,8 @@ function HostEditorContent({
                 jumpHostId: hostSupportsJumpHosts(protocol) ? current.jumpHostId : "",
                 agentForwarding: hostSupportsCredentialPrompt(protocol) ? current.agentForwarding : false,
                 keyLabel: hostSupportsCredentialPrompt(protocol) ? current.keyLabel : "",
-                sftpRoot: hostSupportsSftp(protocol) ? current.sftpRoot || "/home" : "",
+                // An empty root is left empty: it means "the group's root".
+                sftpRoot: hostSupportsSftp(protocol) ? current.sftpRoot : "",
               }));
             }}
             className={fieldClassName}
@@ -401,7 +415,7 @@ function HostEditorContent({
               value={values.username}
               onChange={(event) => setValues((current) => ({ ...current, username: event.target.value }))}
               className={fieldClassName}
-              placeholder="ops"
+              placeholder={groupUsername ? `inherited from the group: ${groupUsername}` : "ops"}
               aria-invalid={usernameError ? true : undefined}
               aria-describedby={usernameError ? `${formId}-username-error` : undefined}
             />
@@ -671,7 +685,22 @@ function HostEditorContent({
           <span className="text-sm text-slate-300">Group</span>
           <input
             value={values.group}
-            onChange={(event) => setValues((current) => ({ ...current, group: event.target.value }))}
+            onChange={(event) => {
+              const group = event.target.value;
+              setValues((current) => {
+                const groupSftpRoot = groupSettingsFor(groupSettings, group.trim())?.sftpRoot?.trim();
+                // The form starts with the default SFTP root, and a group
+                // that supplies one takes it over — so a NEW host inherits
+                // instead of carrying a root it never chose. An existing
+                // host keeps its own value: a root it was given is not the
+                // form's default, and only the host itself may change it.
+                const sftpRoot =
+                  !host && groupSftpRoot && current.sftpRoot === "/home"
+                    ? ""
+                    : current.sftpRoot;
+                return { ...current, group, sftpRoot };
+              });
+            }}
             className={fieldClassName}
             placeholder="Acme / Production"
           />
@@ -703,7 +732,7 @@ function HostEditorContent({
             value={values.sftpRoot}
             onChange={(event) => setValues((current) => ({ ...current, sftpRoot: event.target.value }))}
             className={fieldClassName}
-            placeholder="/srv"
+            placeholder={groupSftpRoot ? `inherited from the group: ${groupSftpRoot}` : "/srv"}
           />
         </label>
         ) : null}

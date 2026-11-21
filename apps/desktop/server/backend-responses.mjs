@@ -7,6 +7,13 @@ import { PayloadTooLargeError } from "./backend-buffers.mjs";
 import { HostKeyRejectedError } from "./backend-host-keys.mjs";
 import { InvalidHostError } from "./backend-host-validation.mjs";
 import { SshAuthRefusedError } from "./backend-ssh-auth.mjs";
+import { SshConnectError } from "./backend-ssh-failure.mjs";
+import { relayableFailureCode } from "./backend-failure-codes.mjs";
+import { SftpOperationError } from "./backend-sftp-failure.mjs";
+import {
+  ForwardPortInUseError,
+  InvalidForwardRequestError,
+} from "./backend-forwards.mjs";
 
 /**
  * #230: raw errors are published here instead of logged. A subscriber attached
@@ -62,19 +69,36 @@ export function respondError(response, error, status = 500) {
       ? "Invalid request."
       : "Internal server error.";
 
-  // The one exception besides the size limit: a refused host key. Its message
-  // is built by the error itself from the host label and a fixed explanation,
-  // so relaying it does not reopen the hole the deny-by-default rule above
-  // closes — no arbitrary error text is passed through, only this one type's
-  // own. Without it the user sees "Internal server error." for a host whose
-  // key changed, which is the one case they have to act on.
-  if (error instanceof HostKeyRejectedError) {
-    message = error.message;
-  }
-
-  // #473: a refused sign-in method or agent forwarding. Fixed text only (see
-  // SshAuthRefusedError), and it tells the user which host setting to change.
-  if (error instanceof SshAuthRefusedError) {
+  // The types whose own text may be relayed. Each one is built by this
+  // codebase from fixed text and a trusted label — never from the rejected
+  // value, never from anything the caller supplied, never from a library's
+  // own wording — so relaying it does not reopen the hole the deny-by-default
+  // rule above closes.
+  //
+  // They are the failures whose reason the user has to act on:
+  //
+  // - a refused host key: the difference between "the host is unreachable"
+  //   and "the key changed" (and, pre-authentication, no credentials were
+  //   sent);
+  // - a refused sign-in method or agent forwarding, which tells the user
+  //   which host setting to change (#473);
+  // - a rejected host request, which says what was wrong with the request;
+  // - a failed connection, which is what the native shell already sends as a
+  //   typed { code, message } (see src-tauri/src/ipc_error.rs);
+  // - a refused file operation, where "permission denied" and "no such file"
+  //   are the two a user meets most;
+  // - a refused forward request, which names the port that is wrong.
+  const RELAYED_TYPES = [
+    HostKeyRejectedError,
+    SshAuthRefusedError,
+    InvalidHostError,
+    SshConnectError,
+    SftpOperationError,
+    InvalidForwardRequestError,
+    ForwardPortInUseError,
+  ];
+  const isRelayedType = RELAYED_TYPES.some((type) => error instanceof type);
+  if (isRelayedType) {
     message = error.message;
   }
 
@@ -89,13 +113,12 @@ export function respondError(response, error, status = 500) {
     message = `Request body exceeds the ${error.limit}-byte limit.`;
   }
 
-  // The other exception: InvalidHostError is only ever constructed by this
-  // codebase with a static message — never the rejected value, never anything
-  // the caller supplied — so relaying it tells the caller what was wrong
-  // without opening the path #230 closed.
-  if (error instanceof InvalidHostError) {
-    message = error.message;
-  }
+  // A typed failure carries its category alongside the message, so the client
+  // can classify it (and must not retry a refused sign-in or a changed host
+  // key) without reading the text. The category travels only with a relayed
+  // message, and only when it is one of a fixed set the backend chose — never
+  // text from the error. The same check the websocket path makes.
+  const code = isRelayedType ? relayableFailureCode(error) : undefined;
 
-  sendJson(response, statusCode, { error: message });
+  sendJson(response, statusCode, code ? { error: message, code } : { error: message });
 }

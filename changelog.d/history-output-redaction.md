@@ -1,0 +1,1 @@
+- [FEATURE] The session history masks the secrets in the output it keeps — a password, a token, an API key — before the preview is saved, with a setting to turn it off. (#623)

@@ -79,6 +79,28 @@ const RULES: ClassifierRule[] = [
   // Host key mismatch.
   {
     category: "host_key_mismatch",
+    // #475: a DSA (ssh-dss) key is refused outright — it is 1024-bit and
+    // signed with SHA-1. The key did not change: it was refused for being
+    // too weak, and saying "the host key has changed" about it tells the
+    // user to re-scan a key that is fine and to suspect an attack that is
+    // not there. This rule comes first so a refusal never reads as a
+    // mismatch.
+    //
+    // The refusal phrase, and not the algorithm name alone: a private key
+    // or a user key of the same algorithm is a different failure with a
+    // different fix, and it must not be reported as a host key that was
+    // refused.
+    //
+    // Both runtimes say "offered only a DSA (ssh-dss) host key": the native
+    // shell (src-tauri/src/native_host_keys.rs) and the browser backend
+    // (apps/desktop/server/backend-host-keys.mjs).
+    match: /offered only a DSA \(ssh-dss\) host key/i,
+    message: "The host key is too weak to trust.",
+    hint:
+      "The server offered a DSA (ssh-dss) host key, which this app refuses. Ask the server's administrator to add an Ed25519 or ECDSA host key.",
+  },
+  {
+    category: "host_key_mismatch",
     // OpenSSH (native app) prints "REMOTE HOST IDENTIFICATION HAS CHANGED".
     match: /(?:Host key verification failed|server presented a different host key|host key.*does not match|REMOTE HOST IDENTIFICATION HAS CHANGED)/i,
     message: "Host key has changed.",
@@ -119,6 +141,19 @@ const KNOWN_CATEGORIES: readonly SshErrorCategory[] = [
   "refused",
   "dns_failure",
 ];
+
+/**
+ * Whether a value is a category this classifier acts on.
+ *
+ * The browser backend sends the code beside the message for a failed
+ * connection, the way the native shell sends it for a failed command (see
+ * src-tauri/src/ipc_error.rs). A code is only honoured when it is one of the
+ * categories above: an unknown code falls back to the prose rules, so a
+ * backend that invents a code cannot steer the retry policy.
+ */
+export function isSshErrorCategory(value: unknown): value is SshErrorCategory {
+  return typeof value === "string" && (KNOWN_CATEGORIES as readonly string[]).includes(value);
+}
 
 /**
  * #203: commands migrated to the typed `IpcError` reject with `{ code, message }`

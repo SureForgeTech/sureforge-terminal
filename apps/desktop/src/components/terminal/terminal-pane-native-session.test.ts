@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useGroupSettingsStore } from "../../store/group-settings-store";
 import { useHostsStore } from "../../store/hosts-store";
 import { useKnownHostsStore } from "../../store/known-hosts-store";
 import type { HostRecord } from "../../types/host";
@@ -112,6 +113,43 @@ describe("createTerminalPaneNativeSessionController", () => {
     openBackendSessionSocket.mockReset();
   });
 
+  it("carries the host's group into the connection", async () => {
+    // The group's settings hang off the group, so a connection built without
+    // it silently loses the group's user name, bastion, environment and SFTP
+    // root — on every fresh session.
+    useGroupSettingsStore
+      .getState()
+      .setGroupSettings("Acme / Production", {
+        username: "ops-from-group",
+        sftpRoot: "/srv/app",
+        environment: { REGION: "eu-west-1" },
+      });
+    createBackendSession.mockResolvedValueOnce({ sessionId: "session-1" });
+    openBackendSessionSocket.mockResolvedValue(new FakeSocket());
+
+    const controller = makeController(vi.fn(), {
+      readLatestHost: () =>
+        ({
+          id: "host-1",
+          group: "Acme / Production",
+          jumpHostId: undefined,
+        }) as never,
+      sftpRoot: "",
+      username: "",
+    });
+
+    await controller.connectNativeSession();
+
+    const connection = createBackendSession.mock.calls[0]?.[0] as
+      | { username?: string; sftpRoot?: string; environment?: Record<string, string> }
+      | undefined;
+    expect(connection?.username).toBe("ops-from-group");
+    expect(connection?.sftpRoot).toBe("/srv/app");
+    expect(connection?.environment).toEqual({ REGION: "eu-west-1" });
+
+    useGroupSettingsStore.getState().clearGroupSettings("Acme / Production");
+  });
+
   it("schedules a reconnect end to end when a connected socket closes", async () => {
     const sockets: FakeSocket[] = [];
     createBackendSession
@@ -186,6 +224,72 @@ describe("createTerminalPaneNativeSessionController", () => {
       "error",
       "Jump host refused the connection."
     );
+  });
+
+  it("does not retry a refused sign-in the backend reported with a code", async () => {
+    // The backend's failure message is fixed text, so the category cannot be
+    // read from it — it travels as a code beside the message. A refused
+    // sign-in must not be retried: the same credentials will be refused
+    // again, and repeated failed logins can lock the account.
+    //
+    // The session had connected first, so the retry policy WOULD retry it if
+    // the failure were not recognised as a refused sign-in. Without the code
+    // the failure reads as unknown — and unknown IS retried.
+    createBackendSession.mockResolvedValue({ sessionId: "session-1" });
+    const socket = new FakeSocket();
+    openBackendSessionSocket.mockResolvedValue(socket);
+    const setPaneState = vi.fn();
+    const controller = makeController(setPaneState);
+
+    await controller.connectNativeSession();
+    socket.dispatch("message", {
+      data: JSON.stringify({ type: "status", state: "connected" }),
+    });
+    socket.dispatch("message", {
+      data: JSON.stringify({
+        type: "error",
+        message: "gateway.internal:22 refused the sign-in. Check the username.",
+        code: "auth_failed",
+      }),
+    });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(openBackendSessionSocket).toHaveBeenCalledTimes(1);
+    expect(setPaneState).toHaveBeenLastCalledWith(
+      "pane-1",
+      "error",
+      "gateway.internal:22 refused the sign-in. Check the username."
+    );
+  });
+
+  it("retries a failure the backend reported with a retryable code", async () => {
+    // The other side of the same rule: a host that could not be reached is
+    // worth another attempt. This one guards against over-blocking — a code
+    // the client does not know must not stop a retry that should happen.
+    createBackendSession
+      .mockResolvedValueOnce({ sessionId: "session-1" })
+      .mockResolvedValueOnce({ sessionId: "session-2" });
+    const socket = new FakeSocket();
+    openBackendSessionSocket.mockResolvedValue(socket);
+    const setPaneState = vi.fn();
+    const controller = makeController(setPaneState);
+
+    await controller.connectNativeSession();
+    // A session that had connected is retried when it fails; a first attempt
+    // that never connected is not, and the user is told why.
+    socket.dispatch("message", {
+      data: JSON.stringify({ type: "status", state: "connected" }),
+    });
+    socket.dispatch("message", {
+      data: JSON.stringify({
+        type: "error",
+        message: "Could not reach gateway.internal:22. Check your network connection.",
+        code: "network_unreachable",
+      }),
+    });
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(openBackendSessionSocket).toHaveBeenCalledTimes(2);
   });
 
   it("#510: a new attempt after an error applies its own statuses", async () => {
