@@ -33,11 +33,16 @@ Only the **delivery**, which needs the repository owner's credentials:
 
 **Nothing — the work is merged.** `main` carries it as `04d39a2` (the squash of #623).
 
-**MERGED.** Pull request #623 (https://github.com/SureForgeTech/sureforge-terminal/pull/623) was squash-merged into `main` on 2026-11-20 as `04d39a2` — "feat: five features, and the browser-backend failures they build on", 103 files, +16783 / -292.
+**MERGED.** Pull request #623 (https://github.com/SureForgeTech/sureforge-terminal/pull/623) was squash-merged into `main` on 2026-11-20 as `04d39a2` — "feat: five features, and the browser-backend failures they build on", 103 files, +16783 / -292. #624 (the `(#623)` numbers on the changelog entries) followed as `fef5e9e`.
 
-Every check was green on the head it merged: `validate` (6m56s), `rust-validate` (9m23s), `CodeQL`, both CodeQL analyses, the sign-off check and `native-ssh-fixtures` all passed, and there were no review threads. The merged tree's product code is byte-identical to the reviewed branch.
+Every check was green on the head each merged: `validate`, `rust-validate`, `CodeQL`, both CodeQL analyses, the sign-off check and `native-ssh-fixtures` all passed, and there were no review threads. The merged tree's product code is byte-identical to the reviewed branch.
 
-Nothing is left to merge. The branch `wip/sureforge-terminal-features` is kept on the remote as the record of the work; `main` now carries the change.
+**Two of the three deferred defects were fixed afterwards**, in #625 (squash-merged as `9f30434` on 2026-11-21):
+
+- A host key refused for being too weak (a DSA (ssh-dss) key) was reported as "Host key has changed." in browser mode and "Connection failed." in the native app. It is now named for what it is, in both runtimes.
+- A symlink to a directory was listed as a file, so the file browser offered to download a directory it cannot read. The listing resolves the target of the links in it.
+
+Both were reviewed independently and merged with every check green. The branches `wip/sureforge-terminal-features` and `fix/weak-key-and-symlink-defects` are kept on the remote as the record.
 
 If the pull request is opened again from scratch, the commands are:
 
@@ -153,4 +158,5 @@ Outside the repository (a sandbox rebuild outside `/workspace` would lose these)
 ## Known, accepted, non-blocking
 
 - The preview of an output that ends in an unterminated quoted value is conservative until the output is finished (the persisted value of a finished command is exact).
-- `known_hosts` ignores the key algorithm; a symlinked directory is listed as an unopenable file; the DSA refusal wording reads "Host key has changed." All predate this work and are untouched.
+- `known_hosts` ignores the key algorithm: the app pins a host's key by hostname and port, so a host that legitimately presents a second, differently-typed trusted key is reported as a mismatch. Fixing it needs the connection to carry every trusted key for the host rather than one — a protocol change in the browser backend and in the native crate, with the retry policy to think about. Not started; it is a design decision rather than a patch.
+- The native half of the symlink fix: the native listing reports a link as a file and its `RemoteFileEntry` has no `linked` field, so the two runtimes differ until the Rust crate is changed. It needs a Rust toolchain to build and test, which this environment does not have. Recorded on issue #603.
