@@ -27,6 +27,15 @@ if [[ "$1" == "release" && "$2" == "create" ]]; then echo "CREATE $*" >> "$FAKE_
 if [[ "$1" == "release" && "$2" == "upload" ]]; then echo "UPLOAD $*" >> "$FAKE_LOG"; exit 0; fi
 if [[ "$1" == "api" ]]; then
   echo "API $*" >> "$FAKE_LOG"
+  case "$2" in
+    */compare/*)
+      if [[ "\${FAKE_COMPARE_STATE:-ok}" == "broken" ]]; then
+        echo "Get https://api.github.com/x: dial tcp: lookup api.github.com: no such host" >&2
+        exit 1
+      fi
+      printf '%s\n' "\${FAKE_COMPARE_STATUS:-ahead}"
+      exit 0;;
+  esac
   printf '%s\\t%s\\n' "\${FAKE_TAG_COMMIT}" "commit"
   exit 0
 fi
@@ -47,6 +56,7 @@ function fixture(manifestUpdater: Record<string, unknown>) {
     "load-env.sh",
     "verify-updater-key-match.mjs",
     "verify-release-tag-commit.mjs",
+    "verify-release-provenance.mjs",
   ]) {
     copyFileSync(join(ROOT, "scripts", file), join(dir, "scripts", file));
   }

@@ -82,6 +82,12 @@ no `native:dmg` step, so a CI-published release carries no DMG installer even on
 prerequisites exist. Until then the local path above is the only release route, and any release
 published without the updater triplet leaves installed copies' update checks 404ing (#224).
 
+Publishing also requires the promoted bundle's build commit to be contained in `main`. Before any
+tag lookup, release creation or upload, `native-publish-release.sh` compares `<built commit>...main`
+through the GitHub compare API and accepts only `identical` or `ahead`; `behind`, `diverged`, an
+unknown commit or a failed lookup refuses the release. This stops a dispatch or local publish from
+shipping an unmerged branch.
+
 ## Required Checks Before Shipping
 
 - `npm run native:check`

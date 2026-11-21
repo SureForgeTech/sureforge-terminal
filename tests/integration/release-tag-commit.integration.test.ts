@@ -37,6 +37,15 @@ if [[ "$1" == "release" && "$2" == "upload" ]]; then
 fi
 if [[ "$1" == "api" ]]; then
   echo "API $*" >> "$FAKE_LOG"
+  case "$2" in
+    */compare/*)
+      if [[ "\${FAKE_COMPARE_STATE:-ok}" == "broken" ]]; then
+        echo "Get https://api.github.com/x: dial tcp: lookup api.github.com: no such host" >&2
+        exit 1
+      fi
+      printf '%s\n' "\${FAKE_COMPARE_STATUS:-ahead}"
+      exit 0;;
+  esac
   case "\${FAKE_TAG_STATE:-present}" in
     missing) echo "gh: Not Found (HTTP 404)" >&2; exit 1;;
     broken) echo "Get https://api.github.com/x: dial tcp: lookup api.github.com: no such host" >&2; exit 1;;
@@ -83,6 +92,7 @@ function fixture(manifest: Record<string, unknown> = {}) {
     "load-env.sh",
     "verify-release-tag-commit.mjs",
     "verify-updater-key-match.mjs",
+    "verify-release-provenance.mjs",
   ]) {
     copyFileSync(join(ROOT, "scripts", file), join(dir, "scripts", file));
   }
