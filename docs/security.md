@@ -61,5 +61,7 @@
 
 ## Open Security Work
 
-- Execute the CI release workflow with live repository secrets so the GitHub-hosted signing and
-  notarization path is validated, not just implemented.
+- Execute the CI release workflow end-to-end from the protected `release-signing` environment on a
+  dedicated self-hosted signing runner, so the dispatch-only signing and notarization path is
+  validated, not just implemented. The job must never run on the shared self-hosted pool or a
+  GitHub-hosted runner.

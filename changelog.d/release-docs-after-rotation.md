@@ -1,0 +1,1 @@
+- [INTERNAL] Document the updater-key reinstall requirement and the protected release-signing path (#628)
