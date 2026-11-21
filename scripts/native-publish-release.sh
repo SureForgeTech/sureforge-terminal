@@ -8,6 +8,7 @@ CHANNEL="${MACOS_RELEASE_CHANNEL:-stable}"
 PROMOTED_MANIFEST_PATH="$ROOT_DIR/artifacts/release/promoted/$CHANNEL/latest-macos-release.json"
 DRY_RUN="${RELEASE_DRY_RUN:-0}"
 RELEASE_TARGET="${RELEASE_TARGET:-}"
+SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
 
 if [[ ! -f "$PROMOTED_MANIFEST_PATH" ]]; then
   echo "Promoted release manifest not found at $PROMOTED_MANIFEST_PATH" >&2
@@ -44,6 +45,7 @@ console.log(releaseName);
 console.log(promotionDirectory);
 console.log(releaseNotesPath);
 console.log(JSON.stringify(assetPaths));
+console.log(manifest.commit || "");
 NODE
 )
 
@@ -53,6 +55,10 @@ RELEASE_NAME="${PUBLISH_INFO[2]}"
 PROMOTION_DIRECTORY="${PUBLISH_INFO[3]}"
 RELEASE_NOTES_PATH="${PUBLISH_INFO[4]}"
 ASSET_PATHS_JSON="${PUBLISH_INFO[5]}"
+# The commit the promoted bundle was built from. The release tag must name
+# this commit: the tag trigger the workflow used to have made that true by
+# construction, and the dispatch path does not.
+BUILT_COMMIT="${PUBLISH_INFO[6]}"
 
 mapfile -t ASSET_PATHS < <(ASSET_PATHS_JSON="$ASSET_PATHS_JSON" node <<'NODE'
 const assets = JSON.parse(process.env.ASSET_PATHS_JSON);
@@ -80,7 +86,6 @@ fi
 # output staged from elsewhere, so publish is the last point where the release
 # contents are known.
 if [[ "${REQUIRE_UPDATER_ARTIFACTS:-0}" == "1" ]]; then
-  SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
   bash "$SCRIPT_DIR/verify-updater-artifacts.sh" "${ASSET_PATHS[@]}"
   UPDATER_TARBALL=""
   for asset in "${ASSET_PATHS[@]}"; do
@@ -121,15 +126,41 @@ fi
 
 : "${GITHUB_REPOSITORY:?Set GITHUB_REPOSITORY before publishing a release.}"
 
-if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+RELEASE_EXISTS=0
+if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+  RELEASE_EXISTS=1
+fi
+
+if [[ "$RELEASE_EXISTS" == "1" ]]; then
+  # The release exists, so the tag does too, and it may name an older commit:
+  # `gh release upload --clobber` would replace the assets under a tag that
+  # points somewhere else. The tag trigger this workflow used to have made
+  # that binding hold by construction; the dispatch path does not, so it is
+  # proved here instead of trusted.
+  if ! node "$SCRIPT_DIR/verify-release-tag-commit.mjs" \
+    --tag "$RELEASE_TAG" --commit "$BUILT_COMMIT" --repo "$GITHUB_REPOSITORY"; then
+    echo "ERROR: refusing to replace the assets of the existing release '$RELEASE_TAG'." >&2
+    exit 1
+  fi
+fi
+
+if [[ "$RELEASE_EXISTS" == "0" ]]; then
   create_args=(
     gh release create "$RELEASE_TAG"
     --repo "$GITHUB_REPOSITORY"
     --title "$RELEASE_NAME"
   )
 
+  # The tag must name the commit the assets were built from. The workflow
+  # dispatches with RELEASE_TARGET set to the commit it built; a local publish
+  # has no dispatch target, so the bundle's own build commit is used.
   if [[ -n "$RELEASE_TARGET" ]]; then
     create_args+=(--target "$RELEASE_TARGET")
+  elif [[ -n "$BUILT_COMMIT" ]]; then
+    create_args+=(--target "$BUILT_COMMIT")
+  else
+    echo "ERROR: cannot determine the commit that was built; refusing to create a release whose tag would not name it." >&2
+    exit 1
   fi
 
   if [[ "$CHANNEL" != "stable" ]]; then
