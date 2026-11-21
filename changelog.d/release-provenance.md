@@ -1,0 +1,1 @@
+- [SECURITY] Refuse to publish a release whose build commit is not contained in main (#629)
