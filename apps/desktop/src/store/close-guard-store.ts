@@ -14,7 +14,7 @@ import { isTauriRuntime } from "../lib/backend-runtime";
 import { useSessionsStore } from "./sessions-store";
 import { countActiveTransfers, useTransfersStore } from "./transfers-store";
 
-export const WINDOW_CLOSE_REQUESTED_EVENT = "terminal_workspace://window-close-requested";
+export { WINDOW_CLOSE_REQUESTED_EVENT } from "../lib/tauri-events";
 
 interface CloseGuardState {
   /** Tabs the user asked to close that still have active transfers. */

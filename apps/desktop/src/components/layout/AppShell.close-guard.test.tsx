@@ -10,6 +10,7 @@ import { cleanup, render, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { MENU_EVENT_NAME } from "../../lib/tauri-events";
 import { useCloseGuardStore, WINDOW_CLOSE_REQUESTED_EVENT } from "../../store/close-guard-store";
 
 vi.mock("./Sidebar", () => ({ Sidebar: () => null }));
@@ -93,6 +94,9 @@ describe("AppShell window close handshake", () => {
       expect(commandCalls("terminal_workspace_set_close_guard_ready")).toEqual([{ ready: true }])
     );
     expect(listenerByEvent.has(WINDOW_CLOSE_REQUESTED_EVENT)).toBe(true);
+    // The native menu and the window close request are different events, so
+    // each listener must be registered for its own shared name.
+    expect(listenerByEvent.has(MENU_EVENT_NAME)).toBe(true);
   });
 
   it("acknowledges a forwarded close request with its sequence number", async () => {

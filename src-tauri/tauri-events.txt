@@ -1,0 +1,11 @@
+# The Tauri event names, in one list.
+#
+# The native shell emits these and the renderer listens for them. Both sides
+# are checked against this file: the crate's test reads it with include_str!,
+# and the renderer's test reads it from disk. A name that changes on one side
+# only fails that side's test — and for the updater progress there is no live
+# release to notice it until the updater feed is alive (#224).
+terminal_workspace://menu-event
+terminal_workspace://session-stream
+terminal_workspace://update-install-progress
+terminal_workspace://window-close-requested

@@ -5319,6 +5319,9 @@ mod native_transport_fixtures;
 mod pty_session_loop_tests;
 
 #[cfg(test)]
+mod tauri_events;
+
+#[cfg(test)]
 mod tests {
     /// #151: the two copy-key refusal tests exercise validation that happens
     /// BEFORE any connect, so they never reach the store. A throwaway one keeps

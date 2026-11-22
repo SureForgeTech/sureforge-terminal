@@ -11,6 +11,7 @@ import { KeyboardCheatsheet } from "../common/KeyboardCheatsheet";
 import { FirstRunTour } from "../common/FirstRunTour";
 import { isTauriRuntime } from "../../lib/backend-runtime";
 import { navigationItems } from "../../lib/navigation";
+import { MENU_EVENT_NAME } from "../../lib/tauri-events";
 import { formatPrimaryShortcut, isPrimaryShortcut } from "../../lib/shortcuts";
 import { cn } from "../../lib/utils";
 import { useAppStore } from "../../store/app-store";
@@ -227,7 +228,7 @@ export function AppShell() {
 
     void import("@tauri-apps/api/event")
       .then(({ listen }) =>
-        listen<string>("terminal_workspace://menu-event", (event) => {
+        listen<string>(MENU_EVENT_NAME, (event) => {
           dispatchMenu(event.payload);
         })
       )
