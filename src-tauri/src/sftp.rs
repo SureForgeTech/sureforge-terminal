@@ -1,5 +1,18 @@
 use crate::*;
 
+// A symlink's own mode says it is a link, not what it points at, so a
+// directory reached through one is listed as a file — and the file browser
+// then offers to download a directory it cannot read. The browser runtime
+// resolves the target with one stat per link; the native half asks the same
+// question, and only for the links in a listing, which are few. A link that
+// points at nothing stays a file: there is no target to read.
+const LINK_DIR_MARKER: &str = "tws-link-target-is-directory";
+
+fn link_target_directory_command(path: &str) -> String {
+    let path_arg = escape_sftp_argument(path);
+    format!("@test -d {} && echo {}", path_arg, LINK_DIR_MARKER)
+}
+
 #[tauri::command]
 pub async fn terminal_workspace_sftp_list_directory(
     request: SftpPathRequest,
@@ -19,8 +32,37 @@ pub async fn terminal_workspace_sftp_list_directory(
                 )
             })?;
 
+        let mut entries = parse_sftp_directory_listing(&target_path, &output);
+        let link_paths: Vec<String> = entries
+            .iter()
+            .filter(|entry| entry.linked)
+            .map(|entry| entry.path.clone())
+            .collect();
+        if !link_paths.is_empty() {
+            let directories = with_native_ssh_control_session(
+                &request.host,
+                &next_native_session_id(),
+                |context| {
+                    let mut hits: Vec<String> = Vec::new();
+                    for path in &link_paths {
+                        let command = link_target_directory_command(path);
+                        let probe = run_sftp_batch_commands(&request.host, context, &[command])?;
+                        if probe.contains(LINK_DIR_MARKER) {
+                            hits.push(path.clone());
+                        }
+                    }
+                    Ok(hits)
+                },
+            )?;
+            for entry in entries.iter_mut() {
+                if entry.linked && directories.contains(&entry.path) {
+                    entry.kind = "directory".to_string();
+                }
+            }
+        }
+
         Ok(SftpDirectoryResponse {
-            entries: parse_sftp_directory_listing(&target_path, &output),
+            entries,
             path: target_path,
         })
     })

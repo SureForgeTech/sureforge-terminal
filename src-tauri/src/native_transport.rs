@@ -1293,6 +1293,9 @@ pub(crate) fn parse_sftp_directory_listing(
             }
 
             let size = parts[4].parse::<u64>().ok()?;
+            // A link's own mode says it is a link, not what it points at, so
+            // the kind is resolved by the caller from the target's mode.
+            let linked = mode.starts_with('l');
             let kind = if mode.starts_with('d') {
                 "directory"
             } else {
@@ -1301,6 +1304,7 @@ pub(crate) fn parse_sftp_directory_listing(
 
             Some(RemoteFileEntry {
                 kind: kind.to_string(),
+                linked,
                 modified_at: parse_sftp_modified_at(parts[5], parts[6], parts[7]),
                 name: name.clone(),
                 path: normalize_remote_path(&format!(
@@ -2494,6 +2498,15 @@ mod tests {
             "lrwxr-xr-x 1 test test 12 Jan 1 2026 link  name -> target  name\n",
         );
         assert_eq!(entries[0].name, "link  name");
+    }
+
+    #[test]
+    fn sftp_listing_marks_links_as_links() {
+        let output = "lrwxr-xr-x 1 test test 12 Jan 1 2026 link -> target\n";
+        let entries = parse_sftp_directory_listing("/files", output);
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].linked);
+        assert_eq!(entries[0].kind, "file");
     }
 
     #[test]

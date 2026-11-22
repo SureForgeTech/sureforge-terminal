@@ -80,6 +80,7 @@ pub struct ResizeBackendSessionRequest {
 #[serde(rename_all = "camelCase")]
 pub struct RemoteFileEntry {
     pub kind: String,
+    pub linked: bool,
     pub modified_at: Option<String>,
     pub name: String,
     pub path: String,
