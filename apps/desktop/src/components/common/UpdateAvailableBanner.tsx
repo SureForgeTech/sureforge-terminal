@@ -20,22 +20,6 @@ type UpdateInstallProgressEvent =
   | { phase: "downloading"; downloaded: number; total: number | null }
   | { phase: "installing" };
 
-/**
- * Subscribe to the native update-install progress events.
- *
- * The event name comes from the shared list, so the renderer listens for
- * exactly the name the native shell emits — a rename on one side fails the
- * side that did not follow it.
- */
-export async function subscribeToUpdateInstallProgress(
-  dispatch: (action: { type: "progress"; progress: UpdateInstallProgressEvent }) => void
-): Promise<() => void> {
-  const { listen } = await import("@tauri-apps/api/event");
-  return listen<UpdateInstallProgressEvent>(UPDATE_INSTALL_PROGRESS_EVENT_NAME, (event) => {
-    dispatch({ type: "progress", progress: event.payload });
-  });
-}
-
 type UpdateInstallProgressState =
   | { phase: "idle" }
   | { phase: "downloading"; downloaded: number; total: number | null }
@@ -126,9 +110,12 @@ export function UpdateAvailableBanner() {
     let cancelled = false;
     let unlistenFn: (() => void) | undefined;
 
-    void subscribeToUpdateInstallProgress((action) => {
-      dispatchInstallProgress(action);
-    })
+    void import("@tauri-apps/api/event")
+      .then(({ listen }) =>
+        listen<UpdateInstallProgressEvent>(UPDATE_INSTALL_PROGRESS_EVENT_NAME, (event) => {
+          dispatchInstallProgress({ type: "progress", progress: event.payload });
+        }),
+      )
       .then((unlisten) => {
         if (cancelled) {
           unlisten();
