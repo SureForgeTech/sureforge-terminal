@@ -5320,6 +5320,31 @@ mod pty_session_loop_tests;
 
 #[cfg(test)]
 mod tests {
+    /// The Tauri event names are the contract between the native shell and the
+    /// renderer: this crate emits them and the renderer listens for them. Both
+    /// sides spell them out, so the list lives in one file and each side is
+    /// checked against it. A name that changes on one side only fails that
+    /// side's test — and for the updater progress there is no live release to
+    /// notice it until the updater feed is alive (#224).
+    #[test]
+    fn tauri_event_names_match_the_shared_list() {
+        let shared_text = include_str!("../tauri-events.txt");
+        let mut shared: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for line in shared_text.lines() {
+            let name = line.trim();
+            if name.is_empty() || name.starts_with('#') {
+                continue;
+            }
+            shared.insert(name);
+        }
+        let mut emitted: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        emitted.insert(crate::SESSION_STREAM_EVENT_NAME);
+        emitted.insert(crate::UPDATE_INSTALL_PROGRESS_EVENT_NAME);
+        emitted.insert(crate::MENU_EVENT_NAME);
+        emitted.insert(crate::WINDOW_CLOSE_REQUESTED_EVENT);
+        assert_eq!(emitted, shared, "the native event names must match the shared list");
+    }
+
     /// #151: the two copy-key refusal tests exercise validation that happens
     /// BEFORE any connect, so they never reach the store. A throwaway one keeps
     /// them honest about that rather than mocking the type away.

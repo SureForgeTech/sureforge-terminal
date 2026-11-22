@@ -1,4 +1,5 @@
 import type { UnlistenFn } from "@tauri-apps/api/event";
+import { SESSION_STREAM_EVENT_NAME } from "./tauri-events";
 import type {
   BackendBooleanResponse,
   BackendHostConnection,
@@ -36,7 +37,6 @@ declare global {
   }
 }
 
-const SESSION_STREAM_EVENT_NAME = "terminal_workspace://session-stream";
 
 let cachedTransportInfoPromise: Promise<BackendTransportInfo> | undefined;
 

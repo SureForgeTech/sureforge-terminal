@@ -12,9 +12,9 @@ import {
   installUpdateAndRestart,
   parseLiveSessionRefusal,
 } from "../../lib/auto-update";
+import { UPDATE_INSTALL_PROGRESS_EVENT_NAME } from "../../lib/tauri-events";
 import { shouldShowUpdateBanner, useAppStore } from "../../store/app-store";
 
-const UPDATE_INSTALL_PROGRESS_EVENT_NAME = "terminal_workspace://update-install-progress";
 
 type UpdateInstallProgressEvent =
   | { phase: "downloading"; downloaded: number; total: number | null }
