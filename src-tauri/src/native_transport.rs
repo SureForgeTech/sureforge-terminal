@@ -1971,7 +1971,7 @@ fn run_native_ssh_command_typed(
         .arg(&context.target_alias)
         .arg(format!("sh -lc {}", shell_single_quote(command)));
     match run_command_with_timeout(ssh, timeout)
-    .map_err(|_| NativeSnippetCommandFailure::ExecRequest)?
+        .map_err(|_| NativeSnippetCommandFailure::ExecRequest)?
     {
         TimedCommand::Completed(output) => Ok(output),
         TimedCommand::TimedOut => Err(NativeSnippetCommandFailure::TimedOut),
@@ -2125,7 +2125,11 @@ pub(crate) fn execute_native_snippet_target(
     let resolved_command = build_exec_command(&command, &target.host.environment);
     let output = match with_native_ssh_control_session(&target.host, &session_label, |context| {
         let timeout = Duration::from_millis(NATIVE_SNIPPET_COMMAND_TIMEOUT_MS);
-        Ok(run_native_ssh_command_typed(context, &resolved_command, timeout))
+        Ok(run_native_ssh_command_typed(
+            context,
+            &resolved_command,
+            timeout,
+        ))
     }) {
         Ok(Ok(output)) => output,
         Ok(Err(NativeSnippetCommandFailure::TimedOut)) => {
