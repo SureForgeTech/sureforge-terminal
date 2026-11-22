@@ -1293,6 +1293,9 @@ pub(crate) fn parse_sftp_directory_listing(
             }
 
             let size = parts[4].parse::<u64>().ok()?;
+            // A link's own mode says it is a link, not what it points at, so
+            // the kind is resolved by the caller from the target's mode.
+            let linked = mode.starts_with('l');
             let kind = if mode.starts_with('d') {
                 "directory"
             } else {
@@ -1301,6 +1304,7 @@ pub(crate) fn parse_sftp_directory_listing(
 
             Some(RemoteFileEntry {
                 kind: kind.to_string(),
+                linked,
                 modified_at: parse_sftp_modified_at(parts[5], parts[6], parts[7]),
                 name: name.clone(),
                 path: normalize_remote_path(&format!(
@@ -1314,6 +1318,13 @@ pub(crate) fn parse_sftp_directory_listing(
         })
         .collect::<Vec<_>>();
 
+    sort_sftp_entries(&mut entries);
+
+    entries
+}
+
+/// Directories first, then names, case-insensitively.
+pub(crate) fn sort_sftp_entries(entries: &mut [RemoteFileEntry]) {
     entries.sort_by(
         |left, right| match (left.kind.as_str(), right.kind.as_str()) {
             ("directory", "file") => std::cmp::Ordering::Less,
@@ -1321,8 +1332,6 @@ pub(crate) fn parse_sftp_directory_listing(
             _ => left.name.to_lowercase().cmp(&right.name.to_lowercase()),
         },
     );
-
-    entries
 }
 
 pub(crate) fn trim_ssh_output(value: &str) -> String {
@@ -1964,6 +1973,21 @@ fn run_native_ssh_command_typed(
     }
 }
 
+/// Whether the remote host says a path is a directory.
+///
+/// `test -d` follows the link, so the answer is the target's, and the answer
+/// is the command's exit status. A host that cannot answer — a link that
+/// points at nothing, a command that fails, a command that does not finish in
+/// time — leaves the path a file, as a failed stat does in the browser
+/// runtime.
+pub(crate) fn remote_path_is_directory(context: &NativeSshControlContext, path: &str) -> bool {
+    let probe = format!("test -d {}", shell_quote(path));
+    match run_native_ssh_command_typed(context, &probe) {
+        Ok(output) => output.status.success(),
+        Err(_) => false,
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn run_native_ssh_command(
     context: &NativeSshControlContext,
@@ -2494,6 +2518,15 @@ mod tests {
             "lrwxr-xr-x 1 test test 12 Jan 1 2026 link  name -> target  name\n",
         );
         assert_eq!(entries[0].name, "link  name");
+    }
+
+    #[test]
+    fn sftp_listing_marks_links_as_links() {
+        let output = "lrwxr-xr-x 1 test test 12 Jan 1 2026 link -> target\n";
+        let entries = parse_sftp_directory_listing("/files", output);
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].linked);
+        assert_eq!(entries[0].kind, "file");
     }
 
     #[test]
