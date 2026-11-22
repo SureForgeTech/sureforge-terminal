@@ -137,6 +137,18 @@ impl NativeTransportFixture {
         fs::create_dir_all(&remote_root).expect("remote root should be created");
         fs::write(remote_root.join("README.txt"), "fixture-readme\n")
             .expect("remote readme should be written");
+
+        // A directory, a link to that directory, a link to the file and a link
+        // to nothing: the listing has to tell them apart, or the file browser
+        // offers to download a directory it cannot read.
+        fs::create_dir_all(remote_root.join("linked-dir"))
+            .expect("fixture linked directory should be created");
+        std::os::unix::fs::symlink("linked-dir", remote_root.join("dir-link"))
+            .expect("fixture directory link should be created");
+        std::os::unix::fs::symlink("README.txt", remote_root.join("file-link"))
+            .expect("fixture file link should be created");
+        std::os::unix::fs::symlink("missing", remote_root.join("broken-link"))
+            .expect("fixture broken link should be created");
         generate_keypair(&client_key_path, "ed25519", Some(passphrase));
         let client_public_key =
             fs::read_to_string(format!("{}.pub", client_key_path.to_string_lossy()))
@@ -1681,6 +1693,37 @@ fn localhost_ssh_transport_fixture_flow() {
             .iter()
             .map(|entry| entry.name.clone())
             .collect::<Vec<_>>()
+    );
+
+    // The kind of an entry, and whether it is a link: a link to a directory is
+    // a directory, a link to a file is a file, and a link to nothing is a
+    // file, because there is no target to read.
+    let find_entry = |name: &str| {
+        listed_directory
+            .entries
+            .iter()
+            .find(|entry| entry.name == name)
+            .map(|entry| (entry.kind.clone(), entry.linked))
+    };
+    assert_eq!(
+        find_entry("README.txt"),
+        Some(("file".to_string(), false)),
+        "a plain file is a file and not a link"
+    );
+    assert_eq!(
+        find_entry("dir-link"),
+        Some(("directory".to_string(), true)),
+        "a link to a directory is a directory"
+    );
+    assert_eq!(
+        find_entry("file-link"),
+        Some(("file".to_string(), true)),
+        "a link to a file is a file"
+    );
+    assert_eq!(
+        find_entry("broken-link"),
+        Some(("file".to_string(), true)),
+        "a link to nothing is a file"
     );
 
     let created_directory =
