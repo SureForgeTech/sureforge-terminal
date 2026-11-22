@@ -1980,10 +1980,7 @@ fn run_native_ssh_command_typed(
 /// points at nothing, a command that fails, a command that does not finish in
 /// time — leaves the path a file, as a failed stat does in the browser
 /// runtime.
-pub(crate) fn remote_path_is_directory(
-    context: &NativeSshControlContext,
-    path: &str,
-) -> bool {
+pub(crate) fn remote_path_is_directory(context: &NativeSshControlContext, path: &str) -> bool {
     let probe = format!("test -d {}", shell_quote(path));
     match run_native_ssh_command_typed(context, &probe) {
         Ok(output) => output.status.success(),
