@@ -1318,6 +1318,13 @@ pub(crate) fn parse_sftp_directory_listing(
         })
         .collect::<Vec<_>>();
 
+    sort_sftp_entries(&mut entries);
+
+    entries
+}
+
+/// Directories first, then names, case-insensitively.
+pub(crate) fn sort_sftp_entries(entries: &mut [RemoteFileEntry]) {
     entries.sort_by(
         |left, right| match (left.kind.as_str(), right.kind.as_str()) {
             ("directory", "file") => std::cmp::Ordering::Less,
@@ -1325,8 +1332,23 @@ pub(crate) fn parse_sftp_directory_listing(
             _ => left.name.to_lowercase().cmp(&right.name.to_lowercase()),
         },
     );
+}
 
-    entries
+/// Whether a stat of a path says it is a directory.
+///
+/// The stat output is the attributes line, and the mode's first character says
+/// what it is. A link that points at nothing has no attributes line, and stays
+/// a file: there is no target to read.
+pub(crate) fn sftp_stat_is_directory(output: &str) -> bool {
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let mode = trimmed.split_whitespace().next().unwrap_or("");
+        return mode.starts_with('d');
+    }
+    false
 }
 
 pub(crate) fn trim_ssh_output(value: &str) -> String {
@@ -1486,6 +1508,12 @@ pub(crate) fn sftp_command_failure(command: &str, output: &str) -> Option<String
         return None;
     }
     let verb = command.split_whitespace().next().unwrap_or("");
+    if verb == "stat" {
+        // A stat's output is data, not a failure: a link that points at
+        // nothing prints an error, and the caller reads the answer from the
+        // output. A stat that fails must not abort the listing it belongs to.
+        return None;
+    }
     if verb == "ls" {
         let failed = text.lines().any(|line| {
             let line = line.trim_start();
@@ -2507,6 +2535,16 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert!(entries[0].linked);
         assert_eq!(entries[0].kind, "file");
+    }
+
+    #[test]
+    fn sftp_stat_reads_whether_the_target_is_a_directory() {
+        let directory = "-rw-r--r-- 1 test test 12 Jan 1 12:00 /files\n";
+        assert!(!sftp_stat_is_directory(directory));
+        let file = "drwxr-xr-x 1 test test 12 Jan 1 12:00 /files\n";
+        assert!(sftp_stat_is_directory(file));
+        assert!(!sftp_stat_is_directory("stat: No such file or directory\n"));
+        assert!(!sftp_stat_is_directory(""));
     }
 
     #[test]

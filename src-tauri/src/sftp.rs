@@ -6,11 +6,13 @@ use crate::*;
 // resolves the target with one stat per link; the native half asks the same
 // question, and only for the links in a listing, which are few. A link that
 // points at nothing stays a file: there is no target to read.
-const LINK_DIR_MARKER: &str = "tws-link-target-is-directory";
-
-fn link_target_directory_command(path: &str) -> String {
+//
+// The question is asked with sftp's own `stat`, which follows the link, so
+// the answer is the target's. The sftp client is not a shell, so nothing but
+// an sftp command may be sent here.
+fn link_target_stat_command(path: &str) -> String {
     let path_arg = escape_sftp_argument(path);
-    format!("@test -d {} && echo {}", path_arg, LINK_DIR_MARKER)
+    format!("stat {}", path_arg)
 }
 
 #[tauri::command]
@@ -45,9 +47,9 @@ pub async fn terminal_workspace_sftp_list_directory(
                 |context| {
                     let mut hits: Vec<String> = Vec::new();
                     for path in &link_paths {
-                        let command = link_target_directory_command(path);
+                        let command = link_target_stat_command(path);
                         let probe = run_sftp_batch_commands(&request.host, context, &[command])?;
-                        if probe.contains(LINK_DIR_MARKER) {
+                        if sftp_stat_is_directory(&probe) {
                             hits.push(path.clone());
                         }
                     }
@@ -59,6 +61,9 @@ pub async fn terminal_workspace_sftp_list_directory(
                     entry.kind = "directory".to_string();
                 }
             }
+            // A link that turned out to be a directory belongs with the
+            // directories, as it does in the browser runtime.
+            sort_sftp_entries(&mut entries);
         }
 
         Ok(SftpDirectoryResponse {
