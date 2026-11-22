@@ -2514,9 +2514,13 @@ mod tests {
     fn the_link_probe_waits_far_less_than_a_snippet() {
         // A listing resolves its links one after another, so a probe that
         // waited as long as an interactive snippet would hold the listing for
-        // a minute per link.
-        assert!(NATIVE_LINK_TARGET_TIMEOUT_MS < NATIVE_SNIPPET_COMMAND_TIMEOUT_MS);
-        assert!(NATIVE_LINK_TARGET_TIMEOUT_MS <= 10_000);
+        // a minute per link. The two timeouts are compared as the durations
+        // the code builds, not as the constants, so the check is about the
+        // behaviour rather than a fact the compiler already knows.
+        let probe_timeout = Duration::from_millis(NATIVE_LINK_TARGET_TIMEOUT_MS);
+        let snippet_timeout = Duration::from_millis(NATIVE_SNIPPET_COMMAND_TIMEOUT_MS);
+        assert!(probe_timeout < snippet_timeout);
+        assert!(probe_timeout <= Duration::from_millis(10_000));
     }
 
     #[test]
