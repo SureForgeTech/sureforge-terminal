@@ -1,0 +1,1 @@
+- [INTERNAL] Gate the Tauri event names against one-sided drift between the native shell and the renderer (#631)
