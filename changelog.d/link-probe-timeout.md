@@ -1,0 +1,1 @@
+- [FIX] The native link probe waits five seconds instead of a minute, so a listing cannot hang on a host that stops answering (#637)
