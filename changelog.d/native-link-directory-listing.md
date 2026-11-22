@@ -1,0 +1,1 @@
+- [FIX] The native file browser lists a link to a directory as a directory, like the browser runtime does (#632)
