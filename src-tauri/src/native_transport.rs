@@ -1999,12 +1999,9 @@ pub(crate) fn run_native_ssh_command(
     context: &NativeSshControlContext,
     command: &str,
 ) -> Result<Output, String> {
-    run_native_ssh_command_typed(
-        context,
-        command,
-        Duration::from_millis(NATIVE_SNIPPET_COMMAND_TIMEOUT_MS),
-    )
-    .map_err(|failure| match failure {
+    let timeout = Duration::from_millis(NATIVE_SNIPPET_COMMAND_TIMEOUT_MS);
+    let outcome = run_native_ssh_command_typed(context, command, timeout);
+    outcome.map_err(|failure| match failure {
         NativeSnippetCommandFailure::ExecRequest => {
             "Could not start the native SSH command".to_string()
         }
@@ -2127,11 +2124,8 @@ pub(crate) fn execute_native_snippet_target(
     let session_label = next_native_session_id();
     let resolved_command = build_exec_command(&command, &target.host.environment);
     let output = match with_native_ssh_control_session(&target.host, &session_label, |context| {
-        Ok(run_native_ssh_command_typed(
-            context,
-            &resolved_command,
-            Duration::from_millis(NATIVE_SNIPPET_COMMAND_TIMEOUT_MS),
-        ))
+        let timeout = Duration::from_millis(NATIVE_SNIPPET_COMMAND_TIMEOUT_MS);
+        Ok(run_native_ssh_command_typed(context, &resolved_command, timeout))
     }) {
         Ok(Ok(output)) => output,
         Ok(Err(NativeSnippetCommandFailure::TimedOut)) => {
