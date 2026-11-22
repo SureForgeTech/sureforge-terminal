@@ -1,0 +1,1 @@
+- [INTERNAL] Document that a publish needs a commit main already holds (#634)

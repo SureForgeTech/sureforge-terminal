@@ -40,6 +40,10 @@
   `native:promote` right after signing and in `native:publish` (dry-run included) before the GitHub
   release is created, so a wrong key or a stale feed can never leave a mislabelled release behind.
 - `native:publish` refuses a `RELEASE_TAG` that is not `v<manifest.version>`.
+- `native:publish` also refuses a build whose commit is not contained in `main`: the release has to
+  come from a commit `main` already holds, so push and merge it (or let `main` reach it) before the
+  publish. The dry run reports this gate with the release target and the tag binding, and says so
+  when a gate could not be checked rather than that it passed.
 
 ## CI Release Path Prerequisites (`release-macos.yml`)
 
