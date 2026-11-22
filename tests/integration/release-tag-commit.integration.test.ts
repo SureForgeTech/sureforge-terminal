@@ -249,6 +249,47 @@ describe("the dry run reports the gates a publish would apply", () => {
     rmSync(dir, { force: true, recursive: true });
   });
 
+  it("reports a release target that is not the commit the assets were built from", () => {
+    const dir = fixture();
+    const result = dryRun(dir, {
+      GITHUB_REPOSITORY: "owner/repository",
+      RELEASE_TARGET: OTHER,
+      FAKE_COMPARE_STATUS: "identical",
+      FAKE_TAG_STATE: "present",
+      FAKE_TAG_COMMIT: BUILT,
+    });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("release target:");
+    expect(result.stderr).toContain("is not the commit the assets were built from");
+    rmSync(dir, { force: true, recursive: true });
+  });
+
+  it("reports an unknown build commit as a refusal rather than a pass", () => {
+    const dir = fixture({ commit: null });
+    const result = dryRun(dir, {
+      GITHUB_REPOSITORY: "owner/repository",
+      FAKE_COMPARE_STATUS: "identical",
+      FAKE_TAG_STATE: "present",
+      FAKE_TAG_COMMIT: BUILT,
+    });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("build commit: the promoted manifest names none");
+    expect(result.stderr).not.toContain("names the built commit");
+    rmSync(dir, { force: true, recursive: true });
+  });
+
+  it("reports provenance that could not be checked as not checked", () => {
+    const dir = fixture();
+    const result = dryRun(dir, {
+      GITHUB_REPOSITORY: "owner/repository",
+      FAKE_COMPARE_STATE: "broken",
+    });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("provenance: could not be checked");
+    expect(result.stderr).not.toContain("NOT in main");
+    rmSync(dir, { force: true, recursive: true });
+  });
+
   it("says the gates were not checked when no repository is named", () => {
     const dir = fixture();
     const result = dryRun(dir, { GITHUB_REPOSITORY: "" });

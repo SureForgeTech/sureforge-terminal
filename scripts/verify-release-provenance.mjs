@@ -13,24 +13,45 @@ function runGh(args) {
   return execFileSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 }
 
+// Two different answers, with two different exit codes: the commit is not in
+// main (1), or the answer could not be established (2). A caller that reports
+// this must not say "not in main" when the question was never answered.
+function refused(message) {
+  const error = new Error(message);
+  error.exitCode = 1;
+  return error;
+}
+
+function notEstablished(message) {
+  const error = new Error(message);
+  error.exitCode = 2;
+  return error;
+}
+
 export function assertBuiltCommitOnDefaultBranch({ builtCommit, repository, gh = runGh }) {
   if (!builtCommit) {
-    throw new Error(
+    throw notEstablished(
       "The promoted manifest names no build commit; cannot prove the release was built from main.",
     );
   }
   if (!repository) {
-    throw new Error("Set GITHUB_REPOSITORY before publishing a release.");
+    throw notEstablished("Set GITHUB_REPOSITORY before publishing a release.");
   }
 
-  const status = String(
-    gh(["api", `repos/${repository}/compare/${builtCommit}...main`, "--jq", ".status"]),
-  ).trim();
+  let status;
+  try {
+    status = String(
+      gh(["api", `repos/${repository}/compare/${builtCommit}...main`, "--jq", ".status"]),
+    ).trim();
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw notEstablished(`The GitHub compare API could not be reached: ${reason}`);
+  }
   if (!status) {
-    throw new Error(`The GitHub compare API returned no status for ${builtCommit}...main.`);
+    throw notEstablished(`The GitHub compare API returned no status for ${builtCommit}...main.`);
   }
   if (!ACCEPTED_COMPARE_STATUSES.has(status)) {
-    throw new Error(
+    throw refused(
       `Commit ${builtCommit} is not contained in main (compare status: ${status}). Refusing to publish an unmerged build.`,
     );
   }
@@ -68,7 +89,7 @@ function main() {
     console.log(`Build commit ${result.builtCommit} is contained in main (compare status: ${result.status}).`);
   } catch (error) {
     console.error(`ERROR: ${error instanceof Error ? error.message : String(error)}`);
-    process.exitCode = 1;
+    process.exitCode = error?.exitCode ?? 1;
   }
 }
 

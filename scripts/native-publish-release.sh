@@ -136,29 +136,52 @@ if [[ "$DRY_RUN" == "1" ]]; then
   # should say what a publish would refuse. The rules themselves live in the
   # two verifiers a publish calls, so they cannot drift apart.
   echo "  gates a real publish applies:"
+  if [[ -n "$RELEASE_TARGET" && -n "$BUILT_COMMIT" && "$RELEASE_TARGET" != "$BUILT_COMMIT" ]]; then
+    echo "    release target: '$RELEASE_TARGET' is not the commit the assets were built from" >&2
+    echo "      — a publish would refuse it" >&2
+  fi
+  if [[ -z "$BUILT_COMMIT" ]]; then
+    echo "    build commit: the promoted manifest names none — a publish would refuse it" >&2
+  fi
   if [[ -z "${GITHUB_REPOSITORY:-}" ]]; then
     echo "    provenance and tag binding: not checked (GITHUB_REPOSITORY is not set)" >&2
   else
-    if node "$SCRIPT_DIR/verify-release-provenance.mjs" \
-      --commit "$BUILT_COMMIT" --repo "$GITHUB_REPOSITORY"; then
-      echo "    provenance: the built commit is contained in main"
-    else
-      echo "    provenance: the built commit is NOT in main — a publish would refuse it" >&2
-    fi
+    PROVENANCE_STATUS=0
+    node "$SCRIPT_DIR/verify-release-provenance.mjs" \
+      --commit "$BUILT_COMMIT" --repo "$GITHUB_REPOSITORY" || PROVENANCE_STATUS=$?
+    case "$PROVENANCE_STATUS" in
+      0)
+        echo "    provenance: the built commit is contained in main"
+        ;;
+      1)
+        echo "    provenance: the built commit is NOT in main — a publish would refuse it" >&2
+        ;;
+      *)
+        echo "    provenance: could not be checked — a publish would refuse it" >&2
+        ;;
+    esac
 
     TAG_STATUS=0
     TAG_COMMIT="$(node "$SCRIPT_DIR/verify-release-tag-commit.mjs" \
       --resolve --tag "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY")" || TAG_STATUS=$?
     case "$TAG_STATUS" in
       0)
-        if [[ -n "$BUILT_COMMIT" && "$TAG_COMMIT" != "$BUILT_COMMIT" ]]; then
+        if [[ -z "$BUILT_COMMIT" ]]; then
+          echo "    tag: '$RELEASE_TAG' exists, but the build commit is unknown" >&2
+          echo "      — a publish would refuse it" >&2
+        elif [[ "$TAG_COMMIT" != "$BUILT_COMMIT" ]]; then
           echo "    tag: '$RELEASE_TAG' names another commit — a publish would refuse it" >&2
         else
           echo "    tag: '$RELEASE_TAG' names the built commit"
         fi
         ;;
       3)
-        echo "    tag: '$RELEASE_TAG' does not exist yet; it would be made at the built commit"
+        if [[ -z "$BUILT_COMMIT" ]]; then
+          echo "    tag: '$RELEASE_TAG' does not exist, and the build commit is unknown" >&2
+          echo "      — a publish would refuse to create it" >&2
+        else
+          echo "    tag: '$RELEASE_TAG' does not exist yet; it would be made at the built commit"
+        fi
         ;;
       *)
         echo "    tag: '$RELEASE_TAG' could not be resolved — a publish would refuse it" >&2
