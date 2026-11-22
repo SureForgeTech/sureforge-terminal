@@ -151,6 +151,16 @@ if [[ -n "$RELEASE_TARGET" && -n "$BUILT_COMMIT" && "$RELEASE_TARGET" != "$BUILT
   exit 1
 fi
 
+# The tag binding proves which commit the assets came from, not that the commit
+# was reviewed and merged. A dispatch can name another ref, and a local publish
+# can name any checkout, so require the built commit to be contained in main
+# before any tag lookup, release creation or upload.
+if ! node "$SCRIPT_DIR/verify-release-provenance.mjs" \
+  --commit "$BUILT_COMMIT" --repo "$GITHUB_REPOSITORY"; then
+  echo "ERROR: refusing to publish a build that is not contained in main." >&2
+  exit 1
+fi
+
 TAG_STATUS=0
 TAG_COMMIT="$(node "$SCRIPT_DIR/verify-release-tag-commit.mjs" \
   --resolve --tag "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY")" || TAG_STATUS=$?
