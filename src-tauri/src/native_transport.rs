@@ -1874,6 +1874,13 @@ where
 /// uncancellably. The child is killed once this deadline passes (#173).
 const NATIVE_SNIPPET_COMMAND_TIMEOUT_MS: u64 = 60_000;
 
+/// How long a link's target may take to answer before the link is treated as a
+/// file. The browser runtime gives up on the same question after two seconds;
+/// the native probe has to start an ssh process as well, so it waits a little
+/// longer, but it must never wait as long as an interactive snippet does —
+/// a listing that holds links would otherwise hang for a minute per link.
+const NATIVE_LINK_TARGET_TIMEOUT_MS: u64 = 5_000;
+
 /// Poll cadence while waiting for a snippet child to exit or time out.
 const NATIVE_SNIPPET_POLL_INTERVAL_MS: u64 = 50;
 
@@ -1954,6 +1961,7 @@ fn run_command_with_timeout(
 fn run_native_ssh_command_typed(
     context: &NativeSshControlContext,
     command: &str,
+    timeout: Duration,
 ) -> Result<Output, NativeSnippetCommandFailure> {
     let mut ssh = Command::new("/usr/bin/ssh");
     ssh.arg("-F")
@@ -1962,10 +1970,7 @@ fn run_native_ssh_command_typed(
         .arg("RequestTTY=no")
         .arg(&context.target_alias)
         .arg(format!("sh -lc {}", shell_single_quote(command)));
-    match run_command_with_timeout(
-        ssh,
-        Duration::from_millis(NATIVE_SNIPPET_COMMAND_TIMEOUT_MS),
-    )
+    match run_command_with_timeout(ssh, timeout)
     .map_err(|_| NativeSnippetCommandFailure::ExecRequest)?
     {
         TimedCommand::Completed(output) => Ok(output),
@@ -1982,7 +1987,8 @@ fn run_native_ssh_command_typed(
 /// runtime.
 pub(crate) fn remote_path_is_directory(context: &NativeSshControlContext, path: &str) -> bool {
     let probe = format!("test -d {}", shell_quote(path));
-    match run_native_ssh_command_typed(context, &probe) {
+    let timeout = Duration::from_millis(NATIVE_LINK_TARGET_TIMEOUT_MS);
+    match run_native_ssh_command_typed(context, &probe, timeout) {
         Ok(output) => output.status.success(),
         Err(_) => false,
     }
@@ -1993,7 +1999,12 @@ pub(crate) fn run_native_ssh_command(
     context: &NativeSshControlContext,
     command: &str,
 ) -> Result<Output, String> {
-    run_native_ssh_command_typed(context, command).map_err(|failure| match failure {
+    run_native_ssh_command_typed(
+        context,
+        command,
+        Duration::from_millis(NATIVE_SNIPPET_COMMAND_TIMEOUT_MS),
+    )
+    .map_err(|failure| match failure {
         NativeSnippetCommandFailure::ExecRequest => {
             "Could not start the native SSH command".to_string()
         }
@@ -2116,7 +2127,11 @@ pub(crate) fn execute_native_snippet_target(
     let session_label = next_native_session_id();
     let resolved_command = build_exec_command(&command, &target.host.environment);
     let output = match with_native_ssh_control_session(&target.host, &session_label, |context| {
-        Ok(run_native_ssh_command_typed(context, &resolved_command))
+        Ok(run_native_ssh_command_typed(
+            context,
+            &resolved_command,
+            Duration::from_millis(NATIVE_SNIPPET_COMMAND_TIMEOUT_MS),
+        ))
     }) {
         Ok(Ok(output)) => output,
         Ok(Err(NativeSnippetCommandFailure::TimedOut)) => {
@@ -2495,6 +2510,15 @@ mod tests {
         let mut remote = forward_request("remote", 443, 0);
         assign_local_forward_port(&mut remote).unwrap();
         assert_eq!(remote.remote_port, 0);
+    }
+
+    #[test]
+    fn the_link_probe_waits_far_less_than_a_snippet() {
+        // A listing resolves its links one after another, so a probe that
+        // waited as long as an interactive snippet would hold the listing for
+        // a minute per link.
+        assert!(NATIVE_LINK_TARGET_TIMEOUT_MS < NATIVE_SNIPPET_COMMAND_TIMEOUT_MS);
+        assert!(NATIVE_LINK_TARGET_TIMEOUT_MS <= 10_000);
     }
 
     #[test]
