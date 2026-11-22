@@ -7,13 +7,10 @@ use crate::*;
 // question, and only for the links in a listing, which are few. A link that
 // points at nothing stays a file: there is no target to read.
 //
-// The question is asked with sftp's own `stat`, which follows the link, so
-// the answer is the target's. The sftp client is not a shell, so nothing but
-// an sftp command may be sent here.
-fn link_target_stat_command(path: &str) -> String {
-    let path_arg = escape_sftp_argument(path);
-    format!("stat {}", path_arg)
-}
+// The question is asked of the host itself: the OpenSSH sftp client has no
+// stat command, and its ls lists a directory's contents rather than one
+// path's attributes. `test -d` follows the link, so its answer is the
+// target's.
 
 #[tauri::command]
 pub async fn terminal_workspace_sftp_list_directory(
@@ -47,9 +44,7 @@ pub async fn terminal_workspace_sftp_list_directory(
                 |context| {
                     let mut hits: Vec<String> = Vec::new();
                     for path in &link_paths {
-                        let command = link_target_stat_command(path);
-                        let probe = run_sftp_batch_commands(&request.host, context, &[command])?;
-                        if sftp_stat_is_directory(&probe) {
+                        if remote_path_is_directory(context, path) {
                             hits.push(path.clone());
                         }
                     }
