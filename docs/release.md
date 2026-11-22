@@ -18,7 +18,10 @@
   places it in the promotion directory so `native:publish` uploads it. Run it after
   `native:promote`; it skips cleanly when no notary keychain profile is configured.
 - `npm run native:publish:dry-run` validates the promoted GitHub release asset set without
-  publishing it.
+  publishing it, and reports the gates a real publish would apply: whether the built commit is
+  contained in `main`, and whether the release tag names it. It reports a gate that would refuse
+  the release without failing the dry run, and says so when `GITHUB_REPOSITORY` is not set and
+  the gates cannot be checked.
 - `.github/workflows/release-macos.yml` is the CI-backed release path for signing, notarization,
   promotion, and GitHub release publishing.
 - The current bundle identifier is `com.abdenterprises.terminalworkspace`.

@@ -123,12 +123,49 @@ if [[ "$DRY_RUN" == "1" ]]; then
   if [[ -n "$RELEASE_TARGET" ]]; then
     echo "  target: $RELEASE_TARGET"
   fi
+  echo "  build commit: $BUILT_COMMIT"
   echo "  promotion directory: $PROMOTION_DIRECTORY"
   if [[ -n "$RELEASE_NOTES_PATH" ]]; then
     echo "  release notes: $RELEASE_NOTES_PATH"
   fi
   printf '  assets:\n'
   printf '    %s\n' "${ASSET_PATHS[@]}"
+
+  # The gates a real publish applies, reported rather than applied: the dry
+  # run is the safe form the repository's own instructions point at, so it
+  # should say what a publish would refuse. The rules themselves live in the
+  # two verifiers a publish calls, so they cannot drift apart.
+  echo "  gates a real publish applies:"
+  if [[ -z "${GITHUB_REPOSITORY:-}" ]]; then
+    echo "    provenance and tag binding: not checked (GITHUB_REPOSITORY is not set)" >&2
+  else
+    if node "$SCRIPT_DIR/verify-release-provenance.mjs" \
+      --commit "$BUILT_COMMIT" --repo "$GITHUB_REPOSITORY"; then
+      echo "    provenance: the built commit is contained in main"
+    else
+      echo "    provenance: the built commit is NOT in main — a publish would refuse it" >&2
+    fi
+
+    TAG_STATUS=0
+    TAG_COMMIT="$(node "$SCRIPT_DIR/verify-release-tag-commit.mjs" \
+      --resolve --tag "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY")" || TAG_STATUS=$?
+    case "$TAG_STATUS" in
+      0)
+        if [[ -n "$BUILT_COMMIT" && "$TAG_COMMIT" != "$BUILT_COMMIT" ]]; then
+          echo "    tag: '$RELEASE_TAG' names another commit — a publish would refuse it" >&2
+        else
+          echo "    tag: '$RELEASE_TAG' names the built commit"
+        fi
+        ;;
+      3)
+        echo "    tag: '$RELEASE_TAG' does not exist yet; it would be made at the built commit"
+        ;;
+      *)
+        echo "    tag: '$RELEASE_TAG' could not be resolved — a publish would refuse it" >&2
+        ;;
+    esac
+  fi
+
   exit 0
 fi
 

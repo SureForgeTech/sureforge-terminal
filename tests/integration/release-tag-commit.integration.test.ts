@@ -6,7 +6,7 @@
 // instead of trusting it. These tests pin the tag resolution rules and the
 // publish script's create, re-publish and refusal paths.
 import { describe, expect, it } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -147,6 +147,27 @@ function publish(dir: string, env: Record<string, string> = {}) {
   }
 }
 
+function dryRun(dir: string, env: Record<string, string> = {}) {
+  const log = join(dir, "gh.log");
+  const result = spawnSync("bash", [join(dir, "scripts/native-publish-release.sh")], {
+    cwd: dir,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${join(dir, "bin")}:${process.env.PATH}`,
+      FAKE_LOG: log,
+      RELEASE_DRY_RUN: "1",
+      ...env,
+    },
+  });
+  return {
+    status: result.status ?? 1,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+    log: existsSafe(log) ? readFileSync(log, "utf8") : "",
+  };
+}
+
 function existsSafe(path: string) {
   try {
     readFileSync(path, "utf8");
@@ -182,6 +203,58 @@ describe("release tag to build commit binding", () => {
       throw ghBroken();
     };
     expect(() => resolveTagCommit("v" + VERSION, REPOSITORY, gh)).toThrow(/no such host/);
+  });
+});
+
+describe("the dry run reports the gates a publish would apply", () => {
+  it("reports a build that is contained in main and a tag that names it", () => {
+    const dir = fixture();
+    const result = dryRun(dir, {
+      GITHUB_REPOSITORY: "owner/repository",
+      FAKE_COMPARE_STATUS: "identical",
+      FAKE_TAG_STATE: "present",
+      FAKE_TAG_COMMIT: BUILT,
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("gates a real publish applies:");
+    expect(result.stdout).toContain("provenance: the built commit is contained in main");
+    expect(result.stdout).toContain(`tag: 'v${VERSION}' names the built commit`);
+    expect(result.log).not.toContain("UPLOAD");
+    rmSync(dir, { force: true, recursive: true });
+  });
+
+  it("reports a build that is not in main without failing the dry run", () => {
+    const dir = fixture();
+    const result = dryRun(dir, {
+      GITHUB_REPOSITORY: "owner/repository",
+      FAKE_COMPARE_STATUS: "diverged",
+    });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("provenance: the built commit is NOT in main");
+    expect(result.log).not.toContain("UPLOAD");
+    rmSync(dir, { force: true, recursive: true });
+  });
+
+  it("reports a tag that names another commit without failing the dry run", () => {
+    const dir = fixture();
+    const result = dryRun(dir, {
+      GITHUB_REPOSITORY: "owner/repository",
+      FAKE_COMPARE_STATUS: "identical",
+      FAKE_TAG_STATE: "present",
+      FAKE_TAG_COMMIT: OTHER,
+    });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain(`tag: 'v${VERSION}' names another commit`);
+    expect(result.log).not.toContain("UPLOAD");
+    rmSync(dir, { force: true, recursive: true });
+  });
+
+  it("says the gates were not checked when no repository is named", () => {
+    const dir = fixture();
+    const result = dryRun(dir, { GITHUB_REPOSITORY: "" });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("not checked (GITHUB_REPOSITORY is not set)");
+    rmSync(dir, { force: true, recursive: true });
   });
 });
 
