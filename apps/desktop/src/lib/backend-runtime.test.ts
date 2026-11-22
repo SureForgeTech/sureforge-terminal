@@ -12,6 +12,7 @@ import {
   resolveBackendHttpUrl,
 } from "./backend-runtime";
 import type { BackendHostConnection } from "./backend-contract";
+import { SESSION_STREAM_EVENT_NAME } from "./tauri-events";
 
 // #101 native-path coverage: the native session socket consumes Tauri
 // `terminal_workspace://session-stream` events. Capture the registered listener so
@@ -20,8 +21,10 @@ import type { BackendHostConnection } from "./backend-contract";
 // untested — all session tests ran in browser/mock mode.
 const eventBus = vi.hoisted(() => {
   const handlers: Array<(event: { payload: unknown }) => void> = [];
+  const names: string[] = [];
   return {
     handlers,
+    names,
     emit(payload: unknown) {
       for (const handler of handlers) {
         handler({ payload });
@@ -29,12 +32,14 @@ const eventBus = vi.hoisted(() => {
     },
     reset() {
       handlers.length = 0;
+      names.length = 0;
     },
   };
 });
 
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async (_name: string, handler: (event: { payload: unknown }) => void) => {
+  listen: vi.fn(async (name: string, handler: (event: { payload: unknown }) => void) => {
+    eventBus.names.push(name);
     eventBus.handlers.push(handler);
     return () => {
       const index = eventBus.handlers.indexOf(handler);
@@ -298,6 +303,9 @@ describe("backend runtime bridge", () => {
       request: { sessionId: "sess-1" },
     });
     expect(socket.readyState).toBe(WebSocket.OPEN);
+    // The listener must be registered for the shared event name, not merely
+    // for some event: the native side emits exactly that name.
+    expect(eventBus.names).toContain(SESSION_STREAM_EVENT_NAME);
   });
 
   it("native socket delivers messages tagged with its own streamId", async () => {

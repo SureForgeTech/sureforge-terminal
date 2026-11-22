@@ -1,7 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const eventMock = vi.hoisted(() => {
+  const calls: Array<[string, unknown]> = [];
+  return {
+    calls,
+    listen: vi.fn(async (name: string, handler: (event: { payload: unknown }) => void) => {
+      calls.push([name, handler]);
+      return () => {};
+    }),
+  };
+});
+
+vi.mock("@tauri-apps/api/event", () => ({ listen: eventMock.listen }));
 
 import {
   INITIAL_UPDATE_INSTALL_PROGRESS,
+  subscribeToUpdateInstallProgress,
   deriveDownloadPercentage,
   deriveUpdateInstallMessage,
   reduceUpdateInstallProgress,
@@ -10,6 +24,12 @@ import {
 it("imports successfully", async () => {
   const mod = await import("./UpdateAvailableBanner");
   expect(mod.UpdateAvailableBanner).toBeDefined();
+});
+
+it("listens for the shared update-install progress event", async () => {
+  await subscribeToUpdateInstallProgress(() => {});
+
+  expect(eventMock.calls[0]?.[0]).toBe("terminal_workspace://update-install-progress");
 });
 
 describe("update install progress", () => {
